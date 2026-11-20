@@ -1,0 +1,14 @@
+[package]
+name = "atlas-explore"
+version = "0.1.0"
+edition = "2024"
+description = "Seed maths for the Atlas map: slime chunks, structure placement candidates (Java/Horizon 26.3 exact), stronghold rings, chunk grid, and a planner for exact server-side structure checks."
+license = "MIT OR Apache-2.0"
+publish = false
+
+# No dependencies on purpose: the crate is `no_std` + `alloc`, so the Atlas wasm mod can depend
+# on it by path without any registry crate to pin.
+[dependencies]
+
+[lib]
+path = "src/lib.rs"
