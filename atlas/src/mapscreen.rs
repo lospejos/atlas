@@ -82,6 +82,11 @@ impl State {
         self.notice = Some((text, self.now + 6000));
     }
 
+    /// Whether a marker at `at` would lie under a panel, the bar or a status line.
+    pub(crate) fn covered(&self, at: [f32; 2]) -> bool {
+        self.covers.iter().any(|r| inside([r[0] - 6.0, r[1] - 6.0, r[2] + 12.0, r[3] + 12.0], at))
+    }
+
     fn hit(&self, mouse: [f32; 2]) -> Option<Hit> {
         self.hits.iter().rev().find(|(_, rect)| inside(*rect, mouse)).map(|(hit, _)| *hit)
     }
@@ -146,7 +151,7 @@ impl State {
         self.draw_explore(draw, view, mouse, &mut tip, &mut label);
 
         // The entities near the player.
-        let on_map = |x: f64, z: f64| Some(self.screen_at(view, x, z));
+        let on_map = |x: f64, z: f64| Some(self.screen_at(view, x, z)).filter(|at| !self.covered(*at));
         if let Some(name) = self.draw_blips(draw, f64::from(self.partial), Some(mouse), 1.5, on_map) {
             label = Some(name.clone());
             tip = Some(name);
@@ -156,6 +161,9 @@ impl State {
         let mut hovered: Option<usize> = None;
         for (index, wp) in self.here() {
             let at = self.screen_at(view, f64::from(wp.pos[0]) + 0.5, f64::from(wp.pos[2]) + 0.5);
+            if self.covered(at) {
+                continue;
+            }
             marker(draw, at, wp.color, 2.5);
             if wp.tracked {
                 draw.fill([at[0] - 5.0, at[1] - 5.0, 10.0, 1.0], 0xFFFF_FFFF);
@@ -185,12 +193,14 @@ impl State {
         }
 
         // Where the player is, and what is under the cursor.
+        let mut status: Vec<[f32; 4]> = Vec::new();
         if let Some(p) = self.player {
             let mut line = format!("You  X {}  Y {}  Z {}", p.pos[0].floor(), p.pos[1].floor(), p.pos[2].floor());
             if let Some((name, x, z)) = self.other_side(p.pos[0], p.pos[2]) {
                 line = format!("{line}   {name}  X {x}  Z {z}");
             }
             let tw = draw.text_width(&line);
+            status.push([2.0, h - 27.0, tw + 8.0, 12.0]);
             draw.fill([2.0, h - 27.0, tw + 8.0, 12.0], PANEL_BG);
             draw.text(&line, [6.0, h - 25.0], 0xFFC8_C8C8, false);
         }
@@ -219,6 +229,7 @@ impl State {
         }
         let tw = draw.text_width(&line);
         if !line.is_empty() {
+            status.push([2.0, h - 14.0, tw + 8.0, 12.0]);
             draw.fill([2.0, h - 14.0, tw + 8.0, 12.0], PANEL_BG);
             draw.text(&line, [6.0, h - 12.0], 0xFFFF_FFFF, false);
         }
@@ -226,6 +237,7 @@ impl State {
         let hint = fit(draw, &hint, (w - tw - 30.0).max(40.0));
         let hw = draw.text_width(&hint);
         if tw + hw + 24.0 < w {
+            status.push([w - hw - 10.0, h - 14.0, hw + 8.0, 12.0]);
             draw.fill([w - hw - 10.0, h - 14.0, hw + 8.0, 12.0], PANEL_BG);
             draw.text(&hint, [w - hw - 6.0, h - 12.0], 0xFFB0_B0B0, false);
         }
@@ -245,6 +257,10 @@ impl State {
         if let Some(text) = label.filter(|_| live && !covered) {
             gfx::hover_label(draw, mouse, &text, self.gui);
         }
+        // What the next draw keeps its markers out from under.
+        self.covers.clear();
+        self.covers.extend(hits.iter().filter(|(hit, _)| !matches!(hit, Hit::Marker(_))).map(|(_, r)| *r));
+        self.covers.extend(status);
         self.hits = hits;
         let _ = host;
     }

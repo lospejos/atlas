@@ -318,6 +318,9 @@ pub(crate) struct State {
     hits: Vec<(mapscreen::Hit, [f32; 4])>,
     /// Where the block a bubble opened in the world is about lies on the screen this frame.
     edit_spot: Option<[f32; 2]>,
+    /// The rectangles the world map's panels, bar and status lines took in the last draw:
+    /// markers under them are left out, so nothing shows through a panel.
+    covers: Vec<[f32; 4]>,
     /// The status line's explanation of what the cursor is on.
     tip: Option<String>,
     /// A line shown over the world map for a while: what it says and until when.
@@ -387,6 +390,7 @@ impl Default for State {
             cursor: [0.0; 2],
             vel: [0.0; 2],
             hits: Vec::new(),
+            covers: Vec::new(),
             edit_spot: None,
             tip: None,
             notice: None,

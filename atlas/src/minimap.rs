@@ -261,6 +261,8 @@ impl State {
         for slot in self.overlays.iter_mut().filter(|s| s.on) {
             slot.overlay.markers(&query, &mut marks);
         }
+        // Nothing of a marker reaches past the map's own edge.
+        let clipped = !cfg.round && draw.push_clip([x, y, side, side]).is_ok();
         for mark in marks.iter().filter(|m| m.area.is_none()) {
             if let Some(at) = place(mark.at[0], mark.at[1]) {
                 marker(draw, at, mark.rgb, 1.5);
@@ -278,6 +280,9 @@ impl State {
                 (reach / o[0].abs().max(o[1].abs()).max(0.001)).min(1.0)
             };
             marker(draw, [center[0] + o[0] * k, center[1] + o[1] * k], w.color, if k < 1.0 { 1.5 } else { 2.0 });
+        }
+        if clipped {
+            let _ = draw.pop_clip();
         }
         let facing = if cfg.rotate { 0.0 } else { player.yaw + 180.0 };
         gfx::player_marker(draw, center, facing, 1.0);

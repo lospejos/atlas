@@ -443,6 +443,8 @@ impl State {
                 }
             }
         }
+        // None under a panel, the bar or a status line.
+        drawn.retain(|(at, _)| !self.covered(*at));
         for (at, m) in &drawn {
             let rgb = COLORS[SetId::ALL.iter().position(|s| *s == m.set).unwrap_or(0)];
             if m.status == Status::Approximate {

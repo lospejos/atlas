@@ -112,7 +112,7 @@ pub struct Radar {
     pub blips: Vec<Blip>,
     kinds: HashMap<EntityTypeKey, (Option<Class>, String, Option<usize>)>,
     /// The faces' sprite names, by their place in `faces::FACES`.
-    pub sprites: Vec<[String; 2]>,
+    pub sprites: Vec<Vec<String>>,
     /// Dropped items' icons by their names.
     items: HashMap<String, Option<ItemKey>>,
     last: HashMap<u32, [f64; 3]>,
@@ -233,29 +233,35 @@ impl State {
         side: f32,
         tint: u32,
     ) -> Option<[f32; 2]> {
-        let (_, w, h, w2, h2) = crate::faces::FACES[index];
-        let (w, h, w2, h2) = (f32::from(w), f32::from(h), f32::from(w2), f32::from(h2));
-        let (all_w, all_h) = (w + w2, h.max(h2));
-        // The longer side is `side`; a long, low profile is let grow until it is six pixels high.
-        let k = (side / all_w.max(all_h)).max((6.0 / all_w.min(all_h)).min(side * 1.5 / all_w.max(all_h)));
-        let (fw, fh) = ((all_w * k).round().max(2.0), (all_h * k).round().max(2.0));
+        let face = &crate::faces::FACES[index];
+        let (w, h) = (f32::from(face.w), f32::from(face.h));
+        let k = side / w.max(h);
+        let (fw, fh) = ((w * k).round().max(2.0), (h * k).round().max(2.0));
         // On whole screen pixels, not whole GUI pixels: a mob walking across the map moves a
         // screen pixel at a time, as the player's own marker does.
         let snap = |v: f32| (v * self.scale).round() / self.scale;
         let corner = [snap(at[0] - fw / 2.0), snap(at[1] - fh / 2.0)];
         let names = self.radar.sprites.get(index)?;
-        // The first part's width on the screen; the second takes the rest.
-        let first = if w2 > 0.0 { (fw * w / all_w).round() } else { fw };
-        let high = |part: f32| (fh * part / all_h).round().max(1.0);
-        draw.fill([corner[0] - 1.0, corner[1] - 1.0, fw + 2.0, fh + 2.0], 0xE000_0000);
-        let tint = (tint != 0xFFFF_FFFF).then_some(tint);
-        let top = corner[1] + fh - high(h);
-        if !draw.sprite(&names[0], [0.0, 0.0, w, h], [corner[0], top, first, high(h)], tint) {
-            return None;
+        // Each part's rectangle on the screen, on GUI pixels from the icon's corner.
+        let edge = |v: u8, size: f32, all: f32| (f32::from(v) * size / all).round();
+        let rects: Vec<[f32; 4]> = face
+            .parts
+            .iter()
+            .map(|p| {
+                let (x0, y0) = (edge(p[0], fw, w), edge(p[1], fh, h));
+                let (x1, y1) = (edge(p[0] + p[2], fw, w), edge(p[1] + p[3], fh, h));
+                [corner[0] + x0, corner[1] + y0, (x1 - x0).max(1.0), (y1 - y0).max(1.0)]
+            })
+            .collect();
+        // A dark edge round the shape the parts make, then the parts.
+        for rect in &rects {
+            draw.fill([rect[0] - 1.0, rect[1] - 1.0, rect[2] + 2.0, rect[3] + 2.0], 0xE000_0000);
         }
-        if w2 > 0.0 {
-            let top = corner[1] + fh - high(h2);
-            draw.sprite(&names[1], [0.0, 0.0, w2, h2], [corner[0] + first, top, fw - first, high(h2)], tint);
+        let tint = (tint != 0xFFFF_FFFF).then_some(tint);
+        for ((part, rect), name) in face.parts.iter().zip(&rects).zip(names) {
+            if !draw.sprite(name, [0.0, 0.0, f32::from(part[2]), f32::from(part[3])], *rect, tint) {
+                return None;
+            }
         }
         Some([fw, fh])
     }

@@ -1,4 +1,4 @@
-# Atlas (`atlas`) 0.3.3
+# Atlas (`atlas`) 0.3.4
 
 A client-side wasm mod for Horizon: a minimap, a full-screen world map of everything you have
 explored (surface, cave layers, the Nether under and over its roof), an entity radar, waypoints
@@ -167,8 +167,11 @@ Copy `horizon-mod-data/my_map` to `horizon-mod-data/atlas`, put `mod.atlas:true`
   walking), snapped to whole screen pixels so the glyphs stay sharp. Labels no longer push each
   other aside, so two close together overlap.
 - **Radar faces** come from the game's entity models: the texture rectangle of the head cube's
-  front face. Where the eyes are on the sides of a long head it is the profile instead: horses,
-  donkeys and mules (muzzle beside head, two rectangles), camels, goats, fish. Slimes, magma
+  front face. Where the eyes are on the sides of a long head it is a profile put together from
+  up to three rectangles into a squarish icon: horses, donkeys and mules (muzzle, head, top of
+  the neck), camels (head and neck), goats (head under a horn), frogs (eyes over the mouth), fish.
+  Markers are left out under the world map's panels, bar and status lines, and cut off at the
+  minimap's edge. Slimes, magma
   cubes, the wither, wolves, bats, parrots, sniffers and nautiluses keep a rectangle chosen by
   eye because their model's head has no usable front face. Markers move by whole screen pixels,
   between the positions of the last two ticks (measured on a walking cow: steps of 1 screen
