@@ -1,4 +1,4 @@
-# Atlas (`atlas`) 0.3.1
+# Atlas (`atlas`) 0.3.2
 
 A client-side wasm mod for Horizon: a minimap, a full-screen world map of everything you have
 explored (surface, cave layers, the Nether under and over its roof), an entity radar, waypoints
@@ -30,11 +30,14 @@ there (see "Moving from my_map").
 - **Bar on the world map** (top left): Auto / Surface (Roof) / Cave, four radar dots (hostile,
   animals, players, items), Biomes, Grid, Slime, Structures, Filter, PNG. What the cursor is on is
   explained bottom right. The same switches are in Options > Mods > Atlas.
-- **Radar.** Icons by default: a mob's **head** where the game has a head item (zombie, creeper,
-  skeleton, wither skeleton, piglin, dragon, player), else its **spawn egg**, on a thin ring (red
-  hostile, green other, white player); a dropped item is its own icon. The world map names the one
-  under the cursor, beside it. "Radar style: Dots" brings the plain dots back. Only what the
-  server shows your client.
+- **Radar.** Each mob is its **face**: the front of its head, flat, as the game's own texture has
+  it (92 vanilla mobs and the player's default face), on a one-pixel dark edge. A dropped item is
+  its own icon. The world map names whatever is under the cursor, face or dot, beside it (setting
+  "Radar names on hover"). "Radar style: Dots" brings the plain dots back. Only what the server
+  shows your client. **No texture is shipped**: `assets/atlas/atlases/radar.json` is an atlas
+  definition that tells the game which rectangle of which of its entity textures to cut out
+  (`unstitch`), registered through `register_texture_atlases`; a resource pack's mobs get their
+  own faces.
 - **Waypoints.** Right-click the map or press J: the bubble asks for a name and a colour. **J in
   the world puts the waypoint on the block the crosshair is on** (up to 256 blocks away) and the
   bubble points at that block; with nothing aimed at it is a plain box that says "Where you stand". Click a
@@ -76,7 +79,7 @@ Esc or M (close). In the bubble: Enter saves, Esc cancels, Tab next colour, Dele
 
 Show minimap, size (48-200), zoom (4x-1/4x), corner, round, turns with you, coordinates,
 Nether / Overworld coordinates (off), map layer (Auto), biome colours (on), radar hostile /
-animals / players / items (on), radar style (heads and icons / dots), beams, labels, names only on hover, death / spawn / bed waypoints
+animals / players / items (on), radar style (faces / dots), radar names on hover (on), beams, labels, names only on hover, death / spawn / bed waypoints
 (on), direction arrow (off). The explore overlays and the structure filter are kept in
 `horizon-mod-data/atlas/explore.txt`, a typed seed in `<world>/seed.txt`.
 
@@ -149,10 +152,15 @@ Copy `horizon-mod-data/my_map` to `horizon-mod-data/atlas`, put `mod.atlas:true`
   answers. In the test the client's raycast found ground 8 blocks away but not a one-block pillar
   30 blocks away; the server's did. So on someone else's server a far or thin target may not be
   found, and J falls back to the plain "Where you stand" box.
-- **Radar icons**: a dropped item's icon is found from its English name (the client is told the
-  name, not the id): other languages and odd names get the yellow dot. Player heads are the
-  default head, not the player's skin. Mobs without a spawn egg get a dot. At most 64 icons are
-  drawn, the rest as dots. Icons cost about 0.05 ms a frame more than dots with 11 entities.
+- **Radar faces**: players get the default face, not their skin (no API gives a client the skin's
+  pixels). A mod's mob, or one without an entry in the table, is a dot. Faces were picked by eye
+  from 26.3's textures: a few are a profile (horse, goat) or a body part that reads better than
+  the head (sniffer's nose, nautilus's shell), and camel is a guess. A dropped item's icon is found
+  from its English name (the client is told the name, not the id); an item not found that way is a
+  small grey tile.
+- **Labels in the world** are drawn in the mod's own 3 x 5 pixel font, two screen pixels a font
+  pixel: ten screen pixels high at any distance and any GUI scale, upper case only. (The game's
+  text cannot be drawn smaller than the GUI scale makes it.)
 - **A cave layer never visited** still fills in as it is read (two chunks a tick near you,
   about a second for the minimap's area): only what is stored can be shown at once.
 

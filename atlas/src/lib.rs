@@ -10,6 +10,7 @@
 mod bubble;
 mod explore;
 mod export;
+mod faces;
 mod gfx;
 mod mapscreen;
 mod mapview;
@@ -110,8 +111,10 @@ pub(crate) struct Config {
     passive: bool,
     players: bool,
     items: bool,
-    /// Mob heads, spawn eggs and item icons on the radar instead of dots.
+    /// Mobs' and players' faces on the radar instead of dots.
     icons: bool,
+    /// The world map names the radar marker under the cursor.
+    hover: bool,
     beams: bool,
     labels: bool,
     hover_names: bool,
@@ -139,6 +142,7 @@ impl Default for Config {
             players: true,
             items: true,
             icons: true,
+            hover: true,
             beams: true,
             labels: true,
             hover_names: false,
@@ -151,7 +155,8 @@ impl Default for Config {
 }
 
 /// The on/off settings: key and default.
-const TOGGLES: [(&str, bool); 17] = [
+const TOGGLES: [(&str, bool); 18] = [
+    ("radar_hover", true),
     ("minimap", true),
     ("minimap_round", false),
     ("minimap_rotate", false),
@@ -198,6 +203,7 @@ fn settings() -> Vec<SettingSpec> {
         toggle("radar_players"),
         toggle("radar_items"),
         choice("radar_style", &["icons", "dots"], 0),
+        toggle("radar_hover"),
         toggle("beams"),
         toggle("labels"),
         toggle("hover_names"),
@@ -591,6 +597,7 @@ impl State {
             players: on("radar_players", d.players),
             items: on("radar_items", d.items),
             icons: host.setting_choice("radar_style").unwrap_or(0) == 0,
+            hover: on("radar_hover", d.hover),
             beams: on("beams", d.beams),
             labels: on("labels", d.labels),
             hover_names: on("hover_names", d.hover_names),
@@ -993,6 +1000,14 @@ impl Hooks for Atlas {
                     SERVER_BEAT.store(beat + 1, Ordering::Relaxed);
                 }
             }
+        }
+    }
+
+    /// The radar's faces: an atlas whose definition cuts them out of the game's own entity
+    /// textures (`assets/atlas/atlases/radar.json`). The game stitches them into its GUI atlas.
+    fn register_texture_atlases(&self, _: &RegistrationContext, event: &mut mod_api::RegisterTextureAtlasesEvent<'_>) {
+        if let Ok(id) = mod_api::Identifier::parse("atlas:radar") {
+            event.atlases.push(mod_api::TextureAtlasRegistration { atlas: id.clone(), definition: id });
         }
     }
 

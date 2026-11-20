@@ -317,20 +317,24 @@ impl State {
             shown.push((d, wp, sx, sy));
         }
         shown.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // Small and the same size on the screen at any distance and any GUI scale: a font pixel
+        // is two screen pixels, so a label is ten screen pixels high.
+        let px = 2.0 / host.gui_scale().unwrap_or(2).max(1) as f32;
         let mut placed: Vec<[f32; 4]> = Vec::new();
         for (d, wp, sx, sy) in shown {
             let text = format!("{} {}", wp.name, distance_text(d));
-            let tw = draw.text_width(&text);
-            let mut rect = [(sx - tw / 2.0).round() - 3.0, (sy - 12.0).round() - 2.0, tw + 6.0, 13.0];
+            let tw = gfx::tiny_width(&text, px);
+            let high = 9.0 * px;
+            let mut rect = [(sx - tw / 2.0 - 2.0 * px).round(), (sy - high - 2.0).round(), tw + 4.0 * px, high];
             while placed.iter().any(|p| {
                 rect[0] < p[0] + p[2] && p[0] < rect[0] + rect[2] && rect[1] < p[1] + p[3] && p[1] < rect[1] + rect[3]
             }) {
-                rect[1] += 14.0;
+                rect[1] += high + px;
             }
             placed.push(rect);
-            draw.fill([rect[0], rect[1], rect[2], 12.0], 0x8000_0000);
-            draw.fill([rect[0], rect[1] + 12.0, rect[2], 1.0], argb(wp.color));
-            draw.text(&text, [rect[0] + 3.0, rect[1] + 2.0], 0xFFFF_FFFF, false);
+            draw.fill([rect[0], rect[1], rect[2], high - px], 0x9000_0000);
+            draw.fill([rect[0], rect[1] + high - px, rect[2], px], argb(wp.color));
+            gfx::tiny_text(draw, &text, [rect[0] + 2.0 * px, rect[1] + 1.5 * px], px, 0xFFFF_FFFF);
         }
     }
 

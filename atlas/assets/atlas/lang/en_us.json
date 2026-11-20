@@ -57,7 +57,9 @@
   "atlas.setting.arrow": "Direction arrow",
   "atlas.setting.arrow.tooltip": "An arrow at the top of the screen pointing to the tracked waypoint, with its distance. Pick the waypoint with Track in its bubble on the world map.",
   "atlas.setting.radar_style": "Radar style",
-  "atlas.setting.radar_style.tooltip": "Icons: a mob's head where the game has one, else its spawn egg, and a dropped item's own icon. Dots: plain coloured dots.",
-  "atlas.setting.radar_style.icons": "Heads and icons",
-  "atlas.setting.radar_style.dots": "Dots"
+  "atlas.setting.radar_style.tooltip": "Faces: each mob's own face, cut from the game's textures (a resource pack changes them too), and a dropped item's icon. Dots: plain coloured dots.",
+  "atlas.setting.radar_style.icons": "Faces",
+  "atlas.setting.radar_style.dots": "Dots",
+  "atlas.setting.radar_hover": "Radar names on hover",
+  "atlas.setting.radar_hover.tooltip": "On the world map, show the name of the mob, player or item under the cursor."
 }
