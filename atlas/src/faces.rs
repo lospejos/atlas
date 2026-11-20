@@ -116,17 +116,26 @@ pub const FACES: [Face; 92] = [
     Face { name: "zombified_piglin", w: 10, h: 8, parts: &[[0, 0, 10, 8]] },
 ];
 
+/// Faces whose look is partly in a second texture of the game's drawn over the first (the
+/// enderman's purple eyes, the copper golem's lit ones): its sprite is `<type>_eyes`, cut from
+/// the same rectangle of that texture, and drawn over the face's one part.
+pub const EYES: [&str; 2] = ["copper_golem", "enderman"];
+
 /// The place in [`FACES`] of entity type `path` (`zombie`), if it has a face.
 pub fn index(path: &str) -> Option<usize> {
     FACES.binary_search_by(|f| f.name.cmp(path)).ok()
 }
 
-/// The GUI sprites of face `index`, one for each of its parts.
+/// The GUI sprites of face `index`, one for each of its parts, then its eyes' when it has
+/// them (drawn over its first part).
 pub fn sprites(index: usize) -> Vec<String> {
     let face = &FACES[index];
+    let eyes = EYES.contains(&face.name).then_some("_eyes");
     ["", "_b", "_c"]
         .iter()
         .take(face.parts.len())
+        .copied()
+        .chain(eyes)
         .map(|suffix| format!("atlas:gui/atlases/radar/atlas/{}{suffix}", face.name))
         .collect()
 }
@@ -151,7 +160,13 @@ mod tests {
             assert!(face.w.max(face.h) <= face.w.min(face.h) * 3, "{}", face.name);
         }
         assert!(index("arrow").is_none());
+        for name in EYES {
+            let i = index(name).unwrap();
+            assert_eq!(FACES[i].parts.len(), 1, "{name}: eyes go over one part");
+            assert!(sprites(i)[1].ends_with("_eyes"));
+            assert!(definition.contains(&format!("\"sprite\": \"atlas:{name}_eyes\"")), "{name}");
+        }
         // Nothing but vanilla's own textures is named: no picture is shipped.
-        assert_eq!(definition.matches("\"resource\": \"minecraft:entity/").count(), FACES.len());
+        assert_eq!(definition.matches("\"resource\": \"minecraft:entity/").count(), FACES.len() + EYES.len());
     }
 }

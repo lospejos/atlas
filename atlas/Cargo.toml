@@ -1,6 +1,6 @@
 [package]
 name = "mod-atlas"
-version = "0.3.4"
+version = "0.4.0"
 edition = "2024"
 
 [dependencies]
@@ -13,4 +13,4 @@ atlas-explore = { path = "../atlas-explore" }
 
 # The SDK build this mod is made for: `cargo horizon-mod update` moves it.
 [package.metadata.horizon]
-sdk = "f00125f61f794aaa3d4e950d301f353b35b6ee3d"
+sdk = "0a875da91dbb0fdcb7ba8c42c11341aa229af51a"

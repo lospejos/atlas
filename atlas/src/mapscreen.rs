@@ -3,10 +3,11 @@
 use mod_api::{ClientHost, DrawContext, Flow};
 
 use crate::bubble::Edit;
-use crate::gfx::{self, PANEL_BG, argb, centered, fit, inside, marker};
+use crate::gfx::{self, PANEL_BG, centered, fit, inside, marker};
 use crate::mapview::{View, ZOOM_MAX, ZOOM_STEP, ZoomAnim};
 use crate::overlays::{OverlayMarker, OverlayQuery};
 use crate::store::UNSEEN;
+use crate::scrollbar;
 use crate::waypoints::{self, NETHER, OVERWORLD, Waypoint, distance_text};
 use crate::{ID, KEY_MAP, Mode, SPRITE, State, UNSEEN_COLOR, Ui};
 
@@ -23,11 +24,21 @@ pub enum Hit {
     Export,
     /// The list's panel, where it has nothing else.
     Panel,
-    Row(usize),
-    RowDelete(usize),
-    /// A waypoint shared in chat: take it, or drop it.
-    Inbox(usize, bool),
-    Marker(usize),
+    /// A waypoint's row, its `x` and its beam switch, by the waypoint's id (`Waypoint::id`):
+    /// a click lands on the waypoint drawn there even when the list changed since.
+    Row(u64),
+    RowDelete(u64),
+    RowBeam(u64),
+    /// The list's scrollbar.
+    ListBar,
+    /// The list's search box, and its clear button.
+    Search,
+    SearchClear,
+    /// A structure marker of the explore overlay, by its place in `Explore::picks`.
+    Structure(usize),
+    /// A waypoint shared in chat, by its id: take it, or drop it.
+    Inbox(u64, bool),
+    Marker(u64),
     /// An explore overlay's switch: 0 grid, 1 slime chunks, 2 structures, 3 the filter panel.
     Explore(usize),
     /// A structure set's switch in the filter panel, and the seed field there.
@@ -35,9 +46,94 @@ pub enum Hit {
     Seed,
 }
 
+/// Pixels either side of the list's scrollbar that take the mouse too.
+const LIST_BAR_PAD: f32 = 2.0;
+
+/// The top of the list's first row, below its title and search box.
+const LIST_TOP: f32 = 30.0;
+
 /// A biome id in words: `minecraft:dark_forest` is "Dark Forest".
 fn biome_words(id: &str) -> String {
     crate::radar::pretty(id)
+}
+
+/// The waypoint list's search box: what is typed, and whether it takes the keys.
+#[derive(Default)]
+pub struct Search {
+    pub text: String,
+    pub focus: bool,
+}
+
+impl Search {
+    pub fn type_char(&mut self, c: char) {
+        if !c.is_control() && self.text.chars().count() < waypoints::NAME_MAX {
+            self.text.push(c);
+        }
+    }
+
+    /// Whether a waypoint called `name` is shown: its name holds the text, any case.
+    pub fn matches(&self, name: &str) -> bool {
+        let needle = self.text.trim();
+        needle.is_empty() || name.to_lowercase().contains(&needle.to_lowercase())
+    }
+}
+
+/// A beam as a small glyph, `x` its left edge, `y` its top (9 x 10 pixels): a light shaft
+/// standing on a block. Lit in `rgb`; dark when off.
+fn beam_glyph(draw: &mut dyn DrawContext, x: f32, y: f32, rgb: u32, on: bool, hot: bool) {
+    let (core, halo, base) = match (on, hot) {
+        (true, _) => (0xFFFF_FFFF, 0xB000_0000 | rgb, if hot { 0xFFD0_D0D0 } else { 0xFFA8_A8A8 }),
+        (false, true) => (0xFF90_90A0, 0xFF50_5060, 0xFF90_90A0),
+        (false, false) => (0xFF4C_4C58, 0, 0xFF4C_4C58),
+    };
+    if halo != 0 {
+        draw.fill([x + 3.0, y, 3.0, 7.0], halo);
+    }
+    draw.fill([x + 4.0, y, 1.0, 7.0], core);
+    draw.fill([x + 1.0, y + 7.0, 7.0, 2.0], base);
+    // The block's dark lower edge.
+    draw.fill([x + 1.0, y + 9.0, 7.0, 1.0], 0xA000_0000);
+}
+
+/// The side of a row's beam switch: a square with the beam inside, as tall as a line of text.
+const BEAM_BOX: f32 = 11.0;
+
+/// A waypoint's beam switch in the list: a dark square with a one-pixel rim and the beam inside
+/// it, `at` its top left (`BEAM_BOX` square). On: the shaft lit in the waypoint's colour `rgb`
+/// over a light block. Off: the shaft dark, the block dim. Lighter under the cursor.
+fn beam_button(draw: &mut dyn DrawContext, at: [f32; 2], rgb: u32, on: bool, hot: bool) {
+    let [x, y] = at;
+    let (rim, plate) = match (on, hot) {
+        (true, false) => (0xFF5C_6070, 0xFF24_2834),
+        (true, true) => (0xFFA8_ACBC, 0xFF34_3A4C),
+        (false, false) => (0xFF38_3840, 0xFF10_1014),
+        (false, true) => (0xFF80_8090, 0xFF24_2630),
+    };
+    draw.fill([x, y, BEAM_BOX, BEAM_BOX], rim);
+    draw.fill([x + 1.0, y + 1.0, BEAM_BOX - 2.0, BEAM_BOX - 2.0], plate);
+    // Inside, 9 x 9: the shaft over rows 1 to 5, the block on rows 6 and 7.
+    let (ix, iy) = (x + 1.0, y + 1.0);
+    let (core, halo, block) = match (on, hot) {
+        (true, _) => (0xFFFF_FFFF, 0xC000_0000 | rgb, if hot { 0xFFE0_E0E0 } else { 0xFFB4_B4B4 }),
+        (false, true) => (0xFF90_90A0, 0, 0xFF70_7080),
+        (false, false) => (0xFF4C_4C58, 0, 0xFF40_4048),
+    };
+    if halo != 0 {
+        draw.fill([ix + 3.0, iy + 1.0, 3.0, 5.0], halo);
+    }
+    draw.fill([ix + 4.0, iy + 1.0, 1.0, 5.0], core);
+    draw.fill([ix + 1.0, iy + 6.0, 7.0, 2.0], block);
+}
+
+/// A magnifying glass, `x`, `y` its top left (7 x 7 pixels).
+fn search_glyph(draw: &mut dyn DrawContext, x: f32, y: f32, color: u32) {
+    draw.fill([x + 1.0, y, 3.0, 1.0], color);
+    draw.fill([x + 1.0, y + 4.0, 3.0, 1.0], color);
+    draw.fill([x, y + 1.0, 1.0, 3.0], color);
+    draw.fill([x + 4.0, y + 1.0, 1.0, 3.0], color);
+    draw.fill([x + 4.0, y + 4.0, 1.0, 1.0], color);
+    draw.fill([x + 5.0, y + 5.0, 1.0, 1.0], color);
+    draw.fill([x + 6.0, y + 6.0, 1.0, 1.0], color);
 }
 
 impl State {
@@ -60,12 +156,21 @@ impl State {
         here
     }
 
+    /// The list's rows as the search leaves them: the shared ones waiting (by their place in
+    /// the inbox), then the waypoints in `listing`'s order.
+    fn rows(&self) -> (Vec<usize>, Vec<usize>) {
+        let inbox = (0..self.inbox.len()).filter(|i| self.search.matches(&self.inbox[*i].wp.name)).collect();
+        let list = self.listing().into_iter().filter(|i| self.search.matches(&self.waypoints[*i].name)).collect();
+        (inbox, list)
+    }
+
     /// The waypoint list's panel, and how many rows fit.
     fn panel(&self) -> ([f32; 4], usize) {
-        let rows = self.waypoints.len() + self.inbox.len();
-        let fit = (((self.gui[1] - 60.0) / ROW_H).floor().max(1.0)) as usize;
+        let (inbox, list) = self.rows();
+        let rows = inbox.len() + list.len();
+        let fit = (((self.gui[1] - 74.0) / ROW_H).floor().max(1.0)) as usize;
         let shown = rows.clamp(1, fit);
-        ([self.gui[0] - PANEL_W - 4.0, 4.0, PANEL_W, 16.0 + shown as f32 * ROW_H + 2.0], shown)
+        ([self.gui[0] - PANEL_W - 4.0, 4.0, PANEL_W, LIST_TOP + shown as f32 * ROW_H + 2.0], shown)
     }
 
     /// The other dimension's name and the block there that `x`, `z` here leads to.
@@ -85,6 +190,11 @@ impl State {
     /// Whether a marker at `at` would lie under a panel, the bar or a status line.
     pub(crate) fn covered(&self, at: [f32; 2]) -> bool {
         self.covers.iter().any(|r| inside([r[0] - 6.0, r[1] - 6.0, r[2] + 12.0, r[3] + 12.0], at))
+    }
+
+    /// Whether rectangle `r` reaches under a panel, a button or a status line.
+    fn covers_rect(&self, r: [f32; 4]) -> bool {
+        self.covers.iter().any(|c| r[0] < c[0] + c[2] && c[0] < r[0] + r[2] && r[1] < c[1] + c[3] && c[1] < r[1] + r[3])
     }
 
     fn hit(&self, mouse: [f32; 2]) -> Option<Hit> {
@@ -149,6 +259,15 @@ impl State {
         }
 
         self.draw_explore(draw, view, mouse, &mut tip, &mut label);
+        // A structure marker is a click away from a temporary waypoint there.
+        for (i, (at, _, _)) in self.explore.picks.iter().enumerate() {
+            hits.push((Hit::Structure(i), [at[0] - 5.0, at[1] - 5.0, 10.0, 10.0]));
+            if inside([at[0] - 5.0, at[1] - 5.0, 10.0, 10.0], mouse)
+                && let Some(words) = &tip
+            {
+                tip = Some(format!("{words}   Click: temporary waypoint here"));
+            }
+        }
 
         // The entities near the player.
         let on_map = |x: f64, z: f64| Some(self.screen_at(view, x, z)).filter(|at| !self.covered(*at));
@@ -159,25 +278,33 @@ impl State {
 
         // The waypoints of this dimension.
         let mut hovered: Option<usize> = None;
-        for (index, wp) in self.here() {
+        // Those on the screen, nearest the view's centre first, as many as a frame has time for.
+        let until = host.millis() + 2 * crate::DRAW_WORK_MS;
+        let mut drawn = 0;
+        for (n, (index, wp)) in self.here_nearest([view.cx, view.cz]).into_iter().enumerate() {
+            if drawn >= crate::MAP_WAYPOINTS || (n % 32 == 31 && host.millis() >= until) {
+                break;
+            }
             let at = self.screen_at(view, f64::from(wp.pos[0]) + 0.5, f64::from(wp.pos[2]) + 0.5);
-            if self.covered(at) {
+            if !(-8.0..=w + 8.0).contains(&at[0]) || !(-8.0..=h + 8.0).contains(&at[1]) || self.covered(at) {
                 continue;
             }
-            marker(draw, at, wp.color, 2.5);
-            if wp.tracked {
-                draw.fill([at[0] - 5.0, at[1] - 5.0, 10.0, 1.0], 0xFFFF_FFFF);
-                draw.fill([at[0] - 5.0, at[1] + 4.0, 10.0, 1.0], 0xFFFF_FFFF);
-            }
+            drawn += 1;
+            gfx::waypoint_icon(draw, wp, at, 3.0, false);
             let over = (mouse[0] - at[0]).abs() <= 5.0 && (mouse[1] - at[1]).abs() <= 5.0;
             if over {
                 hovered = Some(index);
             }
-            hits.push((Hit::Marker(index), [at[0] - 5.0, at[1] - 5.0, 10.0, 10.0]));
+            hits.push((Hit::Marker(wp.id), [at[0] - 5.0, at[1] - 5.0, 10.0, 10.0]));
             if if self.config.hover_names { over } else { view.zoom >= 0.5 } {
                 let tw = draw.text_width(&wp.name);
-                draw.fill([at[0] - tw / 2.0 - 2.0, at[1] + 5.0, tw + 4.0, 10.0], 0x8000_0000);
-                centered(draw, &wp.name, at[0], at[1] + 6.0, 0xFFFF_FFFF);
+                let plate = [(at[0] - tw / 2.0 - 2.0).round(), (at[1] + 6.0).round(), tw + 4.0, 10.0];
+                // Not under a panel: its dark plate would show through the panel's. Opaque: the
+                // game draws a see-through fill under the mobs' faces drawn before it.
+                if !self.covers_rect(plate) {
+                    draw.fill(plate, 0xFF18_1A1C);
+                    draw.text(&wp.name, [plate[0] + 2.0, plate[1] + 1.0], 0xFFFF_FFFF, false);
+                }
             }
         }
         if let Some(player) = self.player {
@@ -187,7 +314,8 @@ impl State {
         let below = self.draw_bar(draw, mouse, &mut hits, &mut tip, &mut label);
         self.draw_explore_panel(draw, below, mouse, &mut hits, &mut tip);
         self.draw_list(draw, mouse, &mut hits, &mut tip);
-        if inside(self.panel().0, mouse) || hits.iter().any(|(hit, r)| !matches!(hit, Hit::Marker(_)) && inside(*r, mouse))
+        if inside(self.panel().0, mouse)
+            || hits.iter().any(|(hit, r)| !matches!(hit, Hit::Marker(_) | Hit::Structure(_)) && inside(*r, mouse))
         {
             hovered = None;
         }
@@ -210,7 +338,9 @@ impl State {
             let (x, z) = (bx.floor() as i32, bz.floor() as i32);
             let store = self.shown();
             line = match store.column(x, z) {
-                Some((c, y, _)) if c != UNSEEN && c != crate::store::VOID => format!("X {x}  Z {z}  Y {y}"),
+                Some((c, y, _)) if c != UNSEEN && c != crate::store::VOID => {
+                    format!("X {x}  Z {z}  Y {y}")
+                }
                 _ => format!("X {x}  Z {z}"),
             };
             if let Some(biome) = self.legend.biome_id(store.biome(x, z)) {
@@ -253,13 +383,16 @@ impl State {
             draw.fill([(w - tw) / 2.0 - 5.0, 34.0, tw + 10.0, 13.0], 0xE010_1014);
             centered(draw, &text, w / 2.0, 37.0, 0xFFFF_E080);
         }
-        let covered = hits.iter().any(|(hit, r)| !matches!(hit, Hit::Marker(_) | Hit::Toggle(_)) && inside(*r, mouse));
+        let covered = hits
+            .iter()
+            .any(|(hit, r)| !matches!(hit, Hit::Marker(_) | Hit::Toggle(_) | Hit::Structure(_)) && inside(*r, mouse));
         if let Some(text) = label.filter(|_| live && !covered) {
             gfx::hover_label(draw, mouse, &text, self.gui);
         }
         // What the next draw keeps its markers out from under.
         self.covers.clear();
-        self.covers.extend(hits.iter().filter(|(hit, _)| !matches!(hit, Hit::Marker(_))).map(|(_, r)| *r));
+        self.covers
+            .extend(hits.iter().filter(|(hit, _)| !matches!(hit, Hit::Marker(_) | Hit::Structure(_))).map(|(_, r)| *r));
         self.covers.extend(status);
         self.hits = hits;
         let _ = host;
@@ -397,6 +530,28 @@ impl State {
             }
         }
         x += 5.0;
+        // Every waypoint's beam in the world at once; each keeps its own choice under it.
+        {
+            let on = cfg.beams;
+            let at = place(14.0, &mut x, &mut y);
+            let rect = [at[0], at[1], 14.0, 12.0];
+            let hot = inside(rect, mouse);
+            draw.fill(rect, if on { 0xE034_3A4C } else if hot { 0xD02A_2C36 } else { PANEL_BG });
+            beam_glyph(draw, at[0] + 3.0, at[1] + 1.0, 0x9FD8FF, on, hot);
+            if on {
+                draw.fill([rect[0], rect[1] + 11.0, 14.0, 1.0], 0xFFFF_FFFF);
+            }
+            hits.push((Hit::Toggle("beams"), rect));
+            if hot {
+                *tip = Some(if on {
+                    "All beams: shown (each waypoint's own Beam switch still counts). Click: hide them all".into()
+                } else {
+                    "All beams: hidden. Click: show them again, as each waypoint has it".into()
+                });
+                *label = Some("Beams".to_string());
+            }
+        }
+        x += 5.0;
         let mut switch = |label: &str, hit: Hit, on: bool, words: String, x: &mut f32, y: &mut f32| {
             let at = place(draw.text_width(label) + 8.0, x, y);
             let rect = gfx::button(draw, at, label, on, mouse, 0x9FE070);
@@ -447,17 +602,85 @@ impl State {
         draw.fill(panel, PANEL_BG);
         hits.push((Hit::Panel, panel));
         let count = self.waypoints.len();
-        draw.text(&format!("Waypoints ({count})"), [panel[0] + 4.0, panel[1] + 4.0], 0xFFFF_D75E, true);
-        if count == 0 && self.inbox.is_empty() {
-            draw.text("Right-click the map", [panel[0] + 4.0, panel[1] + 18.0], 0xFFA0_A0A0, false);
-        }
-        let order = self.listing();
-        let total = self.inbox.len() + order.len();
-        let first = (self.list_scroll as usize).min(total.saturating_sub(shown));
+        let (inbox, order) = self.rows();
+        let title = if self.search.text.trim().is_empty() {
+            format!("Waypoints ({count})")
+        } else {
+            format!("Waypoints ({} of {count})", order.len())
+        };
+        draw.text(&title, [panel[0] + 4.0, panel[1] + 4.0], 0xFFFF_D75E, true);
         let right = panel[0] + panel[2];
+
+        // The search box: grey rimmed, white rimmed while it takes the keys.
+        let field = [panel[0] + 4.0, panel[1] + 15.0, panel[2] - 8.0, 12.0];
+        let focus = self.search.focus;
+        let over_field = inside(field, mouse);
+        draw.fill(field, if focus { 0xFFFF_FFFF } else if over_field { 0xFF70_7078 } else { 0xFF40_4048 });
+        draw.fill([field[0] + 1.0, field[1] + 1.0, field[2] - 2.0, field[3] - 2.0], 0xFF00_0000);
+        search_glyph(draw, field[0] + 3.0, field[1] + 2.0, if focus { 0xFFC0_C0C0 } else { 0xFF70_7070 });
+        let text_x = field[0] + 13.0;
+        let clear = [field[0] + field[2] - 11.0, field[1], 11.0, 12.0];
+        let has_text = !self.search.text.is_empty();
+        if has_text {
+            let mut shown_text = self.search.text.clone();
+            while !shown_text.is_empty() && draw.text_width(&shown_text) > field[2] - 27.0 {
+                shown_text.remove(0);
+            }
+            draw.text(&shown_text, [text_x, field[1] + 2.0], 0xFFE0_E0E0, false);
+            if focus && (self.now / 300).is_multiple_of(2) {
+                let cx = text_x + draw.text_width(&shown_text);
+                draw.fill([cx, field[1] + 1.0, 1.0, 10.0], 0xFFD0_D0D0);
+            }
+            let over_clear = inside(clear, mouse);
+            draw.text("x", [clear[0] + 3.0, field[1] + 1.0], if over_clear { 0xFFFF_5555 } else { 0xFF90_9090 }, false);
+            hits.push((Hit::SearchClear, clear));
+            if over_clear {
+                *tip = Some("Clear the search".into());
+            }
+        } else if focus {
+            if (self.now / 300).is_multiple_of(2) {
+                draw.fill([text_x, field[1] + 1.0, 1.0, 10.0], 0xFFD0_D0D0);
+            }
+        } else {
+            draw.text("Search", [text_x, field[1] + 2.0], 0xFF70_7070, false);
+        }
+        hits.push((Hit::Search, if has_text { [field[0], field[1], field[2] - 11.0, field[3]] } else { field }));
+        if over_field && !(has_text && inside(clear, mouse)) {
+            *tip = Some("Type to find waypoints by name. Esc or x: clear".into());
+        }
+
+        let top = panel[1] + LIST_TOP;
+        if count == 0 && self.inbox.is_empty() {
+            draw.text("Right-click the map", [panel[0] + 4.0, top + 2.0], 0xFFA0_A0A0, false);
+        } else if inbox.is_empty() && order.is_empty() {
+            draw.text("No waypoint by that name", [panel[0] + 4.0, top + 2.0], 0xFFA0_A0A0, false);
+        }
+        let total = inbox.len() + order.len();
+        // More rows than fit: a scrollbar at the right edge, the rows a little narrower.
+        self.list_bar = (total > shown).then_some(scrollbar::Bar {
+            track: [right - 2.0 - scrollbar::WIDTH, top, scrollbar::WIDTH, shown as f32 * ROW_H],
+            first: self.list_scroll as usize,
+            shown,
+            total,
+        });
+        if self.list_bar.is_none() {
+            self.list_held = None;
+        }
+        if let (Some(bar), Some(grab)) = (self.list_bar, self.list_held) {
+            self.list_scroll = bar.first_at(mouse[1], grab) as f32;
+        }
+        let held = self.list_held.is_some();
+        // While the bar is held, no row is under the cursor.
+        let mouse = if held { [-1000.0; 2] } else { mouse };
+        let gutter = if self.list_bar.is_some() { 4.0 } else { 0.0 };
+        let right = right - gutter;
+        let first = (self.list_scroll as usize).min(total.saturating_sub(shown));
+        if let Some(bar) = &mut self.list_bar {
+            bar.first = first;
+        }
         for (slot, entry) in (first..total).take(shown).enumerate() {
-            let y = panel[1] + 16.0 + slot as f32 * ROW_H;
-            let row = [panel[0], y, panel[2], ROW_H];
+            let y = top + slot as f32 * ROW_H;
+            let row = [panel[0], y, panel[2] - gutter, ROW_H];
             let delete = [right - 12.0, y, 12.0, ROW_H];
             let hot = inside(row, mouse);
             if hot {
@@ -465,9 +688,10 @@ impl State {
             }
             let over_delete = inside(delete, mouse);
             let x_color = if over_delete { 0xFFFF_5555 } else { 0xFF90_9090 };
-            if entry < self.inbox.len() {
+            if entry < inbox.len() {
                 // Shared in chat, waiting to be taken.
-                let wp = &self.inbox[entry];
+                let entry = inbox[entry];
+                let wp = &self.inbox[entry].wp;
                 let add = [right - 38.0, y, 24.0, ROW_H];
                 draw.text("+", [row[0] + 4.0, y + 2.0], 0xFF55_FFFF, false);
                 let name = fit(draw, &wp.name, row[2] - 54.0);
@@ -475,8 +699,8 @@ impl State {
                 let over_add = inside(add, mouse);
                 draw.text("Add", [add[0] + 2.0, y + 2.0], if over_add { 0xFFFF_FFFF } else { 0xFF55_FFFF }, false);
                 draw.text("x", [delete[0] + 3.0, y + 1.0], x_color, false);
-                hits.push((Hit::Inbox(entry, true), [row[0], y, row[2] - 12.0, ROW_H]));
-                hits.push((Hit::Inbox(entry, false), delete));
+                hits.push((Hit::Inbox(wp.id, true), [row[0], y, row[2] - 12.0, ROW_H]));
+                hits.push((Hit::Inbox(wp.id, false), delete));
                 if hot {
                     *tip = Some(format!(
                         "Shared in chat: {} at {} {} {} in the {}",
@@ -489,14 +713,15 @@ impl State {
                 }
                 continue;
             }
-            let index = order[entry - self.inbox.len()];
+            let index = order[entry - inbox.len()];
             let wp = &self.waypoints[index];
             let here = wp.dim == self.dim;
             let dim = !here || wp.hidden;
-            draw.fill([row[0] + 4.0, y + 3.0, 6.0, 6.0], if dim { 0x7000_0000 | wp.color } else { argb(wp.color) });
-            if wp.tracked {
-                draw.fill([row[0] + 2.0, y + 2.0, 1.0, 8.0], 0xFFFF_FFFF);
-            }
+            gfx::waypoint_icon(draw, wp, [row[0] + 7.0, y + 6.0], 3.0, dim);
+            // Its beam switch, a square level with the `x`: a click switches it.
+            let beam = [delete[0] - BEAM_BOX - 1.0, y, BEAM_BOX + 1.0, ROW_H];
+            let over_beam = inside(beam, mouse);
+            beam_button(draw, [delete[0] - BEAM_BOX, y], wp.color, wp.beam, over_beam);
             let side = if here {
                 self.player.map_or(String::new(), |p| {
                     let (dx, dz) = (f64::from(wp.pos[0]) + 0.5 - p.pos[0], f64::from(wp.pos[2]) + 0.5 - p.pos[2]);
@@ -506,18 +731,36 @@ impl State {
                 waypoints::dim_label(&wp.dim)
             };
             let sw = draw.text_width(&side);
-            let name = fit(draw, &wp.name, row[2] - 30.0 - sw);
+            let name = fit(draw, &wp.name, row[2] - 43.0 - sw);
             draw.text(&name, [row[0] + 13.0, y + 2.0], if dim { 0xFF80_8080 } else { 0xFFFF_FFFF }, false);
+            let nw = draw.text_width(&name);
             if wp.hidden {
-                let nw = draw.text_width(&name);
                 draw.fill([row[0] + 13.0, y + 6.0, nw, 1.0], 0xFF80_8080);
             }
-            draw.text(&side, [delete[0] - sw - 2.0, y + 2.0], if here { 0xFFA0_A0A0 } else { 0xFF70_7890 }, false);
+            if wp.temporary {
+                // Temporary: a dotted line under the name.
+                let mut dx = 0.0;
+                while dx < nw - 1.0 {
+                    draw.fill([row[0] + 13.0 + dx, y + 10.0, 1.0, 1.0], 0xFF9A_9AB0);
+                    dx += 2.0;
+                }
+            }
+            draw.text(&side, [beam[0] - sw - 2.0, y + 2.0], if here { 0xFFA0_A0A0 } else { 0xFF70_7890 }, false);
             draw.text("x", [delete[0] + 3.0, y + 1.0], x_color, false);
-            hits.push((Hit::Row(index), row));
-            hits.push((Hit::RowDelete(index), delete));
+            hits.push((Hit::Row(wp.id), row));
+            hits.push((Hit::RowBeam(wp.id), beam));
+            hits.push((Hit::RowDelete(wp.id), delete));
             if over_delete {
                 *tip = Some("Delete this waypoint".into());
+            } else if over_beam {
+                let all_off = if self.config.beams { "" } else { " (all beams are off on the bar)" };
+                *tip = Some(if wp.beam {
+                    format!("Beam on: click to hide it{all_off}")
+                } else {
+                    format!("Beam off: click to show it{all_off}")
+                });
+            } else if hot && wp.temporary {
+                *tip = Some("Temporary: it deletes itself when you get there   Click: go there   Right-click: edit".into());
             } else if hot {
                 *tip = Some(if here {
                     "Click: go there   Right-click: rename, colour, move, hide, track, link, share".into()
@@ -525,6 +768,11 @@ impl State {
                     format!("In the {}: click to edit", waypoints::dim_label(&wp.dim))
                 });
             }
+        }
+        if let Some(bar) = self.list_bar {
+            let real = if held { self.cursor } else { mouse };
+            bar.draw(draw, real, held, LIST_BAR_PAD);
+            hits.push((Hit::ListBar, bar.grip(LIST_BAR_PAD)));
         }
     }
 
@@ -535,7 +783,41 @@ impl State {
         self.stop_motion();
         self.goto = None;
         let Some(view) = self.view else { return };
-        match self.hit(mouse) {
+        let hit = self.hit(mouse);
+        // A click anywhere else lets go of the search box (what it holds stays).
+        self.search.focus = matches!(hit, Some(Hit::Search));
+        match hit {
+            Some(Hit::Search) => {}
+            Some(Hit::SearchClear) => {
+                self.search.text.clear();
+                self.list_scroll = 0.0;
+            }
+            Some(Hit::ListBar) => {
+                if let Some(bar) = self.list_bar {
+                    let (first, grab) = bar.press(mouse[1]);
+                    self.list_scroll = first as f32;
+                    self.list_held = Some(grab);
+                }
+            }
+            Some(Hit::RowBeam(id)) => {
+                if let Some(w) = self.by_id_mut(id) {
+                    w.beam = !w.beam;
+                    self.save_waypoints(host);
+                }
+            }
+            Some(Hit::Structure(i)) => {
+                let Some((_, pos, name)) = self.explore.picks.get(i).cloned() else { return };
+                // On the ground there, when it is explored; else at the player's height.
+                let y = match self.surface.column(pos[0], pos[2]) {
+                    Some((c, y, _)) if c != UNSEEN && c != crate::store::VOID => i32::from(y) + 1,
+                    _ => self.player.map_or(64, |p| p.pos[1].floor() as i32),
+                };
+                let mut edit = Edit::new([pos[0], y, pos[2]], self.next_color, true);
+                edit.name = name;
+                edit.temporary = true;
+                self.zoom_anim = None;
+                self.ui = Ui::Edit(edit);
+            }
             Some(Hit::Mode(mode)) => {
                 self.set_mode(host, mode);
             }
@@ -566,15 +848,17 @@ impl State {
             }
             Some(Hit::Set(index)) => self.explore.flip_set(index),
             Some(Hit::Seed) => self.explore.begin_entry(),
-            Some(Hit::RowDelete(index)) => {
-                if button == 0 && index < self.waypoints.len() {
+            Some(Hit::RowDelete(id)) => {
+                if button == 0
+                    && let Some(index) = self.find(id)
+                {
                     self.waypoints.remove(index);
                     self.save_waypoints(host);
                     self.list_scroll = 0.0;
                 }
             }
-            Some(Hit::Row(index)) | Some(Hit::Marker(index)) => {
-                let Some(wp) = self.waypoints.get(index) else { return };
+            Some(Hit::Row(id)) | Some(Hit::Marker(id)) => {
+                let Some(wp) = self.waypoints.iter().find(|w| w.id == id) else { return };
                 let row = matches!(self.hit(mouse), Some(Hit::Row(_)));
                 if row && button == 0 && wp.dim == self.dim {
                     self.begin_slide_to(f64::from(wp.pos[0]) + 0.5, f64::from(wp.pos[2]) + 0.5);
@@ -587,12 +871,12 @@ impl State {
                         }
                     }
                     self.zoom_anim = None;
-                    self.ui = Ui::Edit(Edit::of(index, wp));
+                    self.ui = Ui::Edit(Edit::of(wp));
                 }
             }
-            Some(Hit::Inbox(entry, take)) => {
-                if entry < self.inbox.len() {
-                    let wp = self.inbox.remove(entry);
+            Some(Hit::Inbox(id, take)) => {
+                if let Some(entry) = self.inbox.iter().position(|e| e.wp.id == id) {
+                    let wp = self.inbox.remove(entry).wp;
                     if take {
                         self.note(format!("Added \"{}\" ({})", wp.name, waypoints::dim_label(&wp.dim)));
                         self.add_waypoint(host, wp);
@@ -617,11 +901,36 @@ impl State {
         }
     }
 
+    /// A drag: a held scrollbar's thumb follows the cursor, wherever it is. True when one is held.
+    pub(crate) fn drag_bars(&mut self, mouse: [f32; 2]) -> bool {
+        if let Ui::Edit(edit) = &mut self.ui
+            && let Some(picker) = edit.picker.as_mut()
+            && picker.drag_bar(mouse)
+        {
+            return true;
+        }
+        if let (Some(bar), Some(grab)) = (self.list_bar, self.list_held) {
+            self.list_scroll = bar.first_at(mouse[1], grab) as f32;
+            return true;
+        }
+        false
+    }
+
+    /// The mouse button let go: a held scrollbar too. True when one was held.
+    pub(crate) fn release_bars(&mut self) -> bool {
+        let picker = match &mut self.ui {
+            Ui::Edit(edit) => edit.picker.as_mut().is_some_and(|p| p.release_bar()),
+            _ => false,
+        };
+        self.list_held.take().is_some() || picker
+    }
+
     pub(crate) fn map_scroll(&mut self, mouse: [f32; 2], steps: f32) {
         let Some(view) = self.view else { return };
         let (panel, shown) = self.panel();
         if inside(panel, mouse) {
-            let most = (self.waypoints.len() + self.inbox.len()).saturating_sub(shown) as f32;
+            let (inbox, list) = self.rows();
+            let most = (inbox.len() + list.len()).saturating_sub(shown) as f32;
             self.list_scroll = (self.list_scroll - steps.signum()).clamp(0.0, most);
             return;
         }
@@ -638,6 +947,28 @@ impl State {
     pub(crate) fn map_key(&mut self, host: &dyn ClientHost, key: &str) -> Flow {
         let short = key.strip_prefix("key.keyboard.").unwrap_or(key);
         if self.explore_key(short) {
+            return Flow::Cancel;
+        }
+        if self.search.focus {
+            // The search box takes every key: none moves the map or closes it.
+            match short {
+                "escape" => {
+                    self.search.text.clear();
+                    self.search.focus = false;
+                }
+                "enter" | "keypad.enter" => self.search.focus = false,
+                "backspace" => {
+                    self.search.text.pop();
+                }
+                "space" if crate::TEST => self.search.type_char(' '),
+                _ if crate::TEST && short.len() == 1 => {
+                    if let Some(c) = short.chars().next() {
+                        self.search.type_char(c);
+                    }
+                }
+                _ => {}
+            }
+            self.list_scroll = 0.0;
             return Flow::Cancel;
         }
         let bound = |id: &str| host.mod_key(ID, id).is_some_and(|(name, _)| name == key);

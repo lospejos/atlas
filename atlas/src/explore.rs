@@ -2,16 +2,18 @@
 //! slime chunks and structures, all worked out from the world's seed by `atlas-explore`.
 //!
 //! In single player and as a LAN host the mod's half in the integrated server knows the seed
-//! and checks every structure the seed makes possible against the real world (biomes and
-//! terrain), a few a tick: those markers are exact. On someone else's server nothing tells the
-//! seed; typed into the filter panel it gives exact slime chunks and "possible" structures,
-//! drawn hollow because their biome is not checked.
+//! and checks every structure the seed makes possible against the real world (what the loaded
+//! chunks hold), one a tick at most: those markers are exact. Strongholds are not checked (the
+//! game's search places all of them at once, past a hook's budget): they stay "about here".
+//! On someone else's server nothing tells the seed; typed into the filter panel it gives exact
+//! slime chunks and "possible" structures, drawn hollow because their biome is not checked.
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 use atlas_explore::grid::{self, GridLine, LineKind};
 use atlas_explore::{Budget, Dimension, Marker, SetId, Status, Verifier, seed_markers, slime, stronghold};
-use mod_api::{ClientHost, ConfigPath, DrawContext, ServerHost, ServerTickEvent, ServerTickPhase, StructureSearch};
+use atlas_explore::verify::Target;
+use mod_api::{ClientHost, ConfigPath, DrawContext, ServerHost, ServerTickEvent, ServerTickPhase};
 
 use crate::gfx::{self, PANEL_BG, argb, inside};
 use crate::mapscreen::Hit;
@@ -28,8 +30,32 @@ struct Shared {
     sets: Vec<SetId>,
     /// Server ticks since the verifier was made.
     warm: u32,
+    /// The server tick a check ran in, to read how long that tick took on the next one.
+    checked: Option<u64>,
+    /// A check made a tick run long: no more for this world.
+    off: bool,
+    /// The world the client half is in now (a number new for each world it enters, 0 for
+    /// none), and the one the verifier was built in: a server tick that runs once more after
+    /// the client left builds nothing, and a verifier of another world is never used.
+    world: u64,
+    built_for: u64,
 }
-static SHARED: Mutex<Shared> = Mutex::new(Shared { verifier: None, want: None, sets: Vec::new(), warm: 0 });
+static SHARED: Mutex<Shared> = Mutex::new(Shared {
+    verifier: None,
+    want: None,
+    sets: Vec::new(),
+    warm: 0,
+    checked: None,
+    off: false,
+    world: 0,
+    built_for: 0,
+});
+/// Counts the worlds the client half entered.
+static WORLDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Checks a second and a tick: each is up to a few hundred cheap reads.
+const CHECK_BUDGET: Budget = Budget { per_second: 10, per_tick: 1 };
+/// A tick with a check that ran this much (ns) over the average stops the checks.
+const CHECK_SLOW_NS: f64 = 20.0e6;
 /// Server ticks before the first lookup: the world is still coming up.
 const WARM_UP: u32 = 200;
 /// No lookups while the server's ticks take longer than this on average, in milliseconds.
@@ -60,7 +86,8 @@ pub struct Explore {
     pub grid: bool,
     pub slime: bool,
     pub structures: bool,
-    /// The structure sets that are shown.
+    /// The structure sets that are shown: none when all are switched off (unlike
+    /// `atlas_explore`'s lists, where an empty one is every set).
     pub sets: Vec<SetId>,
     /// The filter panel is open.
     pub panel: bool,
@@ -85,6 +112,9 @@ pub struct Explore {
     dirty: bool,
     /// Structure lookups still waiting in the server half.
     pub pending: usize,
+    /// The structure markers the last draw of the world map put on the screen: where, the
+    /// structure's place and its name (a click there makes a temporary waypoint).
+    pub picks: Vec<([f32; 2], [i32; 3], String)>,
 }
 
 impl Default for Explore {
@@ -108,6 +138,7 @@ impl Default for Explore {
             loaded: false,
             dirty: false,
             pending: 0,
+            picks: Vec::new(),
         }
     }
 }
@@ -126,14 +157,17 @@ pub fn parse_seed(text: &str) -> Option<i64> {
 }
 
 impl Explore {
+    /// The settings file. `sets=none` when every set is switched off; a file without a `sets`
+    /// line (written before there was one) shows the default sets.
     fn encode(&self) -> String {
         let sets: Vec<&str> = self.sets.iter().map(|s| s.def().id).collect();
+        let sets = if sets.is_empty() { "none".to_string() } else { sets.join(",") };
         format!(
             "# atlas explore overlays\ngrid={}\nslime={}\nstructures={}\nsets={}\n",
             u8::from(self.grid),
             u8::from(self.slime),
             u8::from(self.structures),
-            sets.join(",")
+            sets
         )
     }
 
@@ -143,9 +177,19 @@ impl Explore {
                 Some(("grid", v)) => self.grid = v == "1",
                 Some(("slime", v)) => self.slime = v == "1",
                 Some(("structures", v)) => self.structures = v == "1",
+                // `none`, and the empty list 0.4.0 wrote when all were switched off: none.
                 Some(("sets", v)) => self.sets = v.split(',').filter_map(SetId::from_id).collect(),
                 _ => {}
             }
+        }
+    }
+
+    /// A world was entered: from now the server half builds for this one only.
+    pub fn enter(&mut self) {
+        self.leave();
+        let world = WORLDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if let Ok(mut shared) = SHARED.try_lock() {
+            shared.world = world;
         }
     }
 
@@ -155,6 +199,10 @@ impl Explore {
             shared.verifier = None;
             shared.want = None;
             shared.warm = 0;
+            shared.checked = None;
+            shared.off = false;
+            shared.world = 0;
+            shared.built_for = 0;
         }
         self.seed = None;
         self.typed = None;
@@ -226,10 +274,10 @@ impl Explore {
         if !fresh && *budget > 0 {
             let (min, max) = ([key.1 * 32, key.2 * 32], [key.1 * 32 + 31, key.2 * 32 + 31]);
             let made = match SHARED.try_lock() {
-                Ok(shared) => Some(match &shared.verifier {
-                    Some(v) if !self.remote => v.markers(key.0, min, max, &self.sets),
-                    _ => seed_markers(seed, key.0, min, max, &self.sets),
-                }),
+                Ok(shared) => {
+                    let checked = shared.verifier.as_ref().filter(|_| !self.remote);
+                    Some(shown_markers(seed, checked, key.0, min, max, &self.sets))
+                }
                 Err(_) => None,
             };
             if let Some(markers) = made {
@@ -241,6 +289,26 @@ impl Explore {
             }
         }
         self.cache.get(&key).map_or(&[], |(_, markers)| markers.as_slice())
+    }
+}
+
+/// The markers of sets `sets` in a box of chunks: checked by `verifier` when there is one, else
+/// what the seed makes possible. No set, no marker (`atlas_explore` reads an empty list as
+/// every set).
+fn shown_markers(
+    seed: i64,
+    verifier: Option<&Verifier>,
+    dim: Dimension,
+    min: [i32; 2],
+    max: [i32; 2],
+    sets: &[SetId],
+) -> Vec<Marker> {
+    if sets.is_empty() {
+        return Vec::new();
+    }
+    match verifier {
+        Some(v) => v.markers(dim, min, max, sets),
+        None => seed_markers(seed, dim, min, max, sets),
     }
 }
 
@@ -318,8 +386,9 @@ impl State {
             }
         }
         let Ok(mut shared) = SHARED.try_lock() else { return };
+        let ours = shared.world != 0 && shared.built_for == shared.world;
         let seed = match &shared.verifier {
-            Some(v) if !ex.remote => {
+            Some(v) if !ex.remote && ours => {
                 if v.revision() != ex.revision {
                     ex.revision = v.revision();
                     ex.stamp += 1;
@@ -352,7 +421,7 @@ impl State {
         let need = if ex.seed.is_some() { "" } else { " (needs the seed: Filter)" };
         let structures = match ex.seed {
             Some((_, true)) if ex.pending > 0 => format!("Structures: checking {} with the world", ex.pending),
-            Some((_, true)) => "Structures, each checked against the world".to_string(),
+            Some((_, true)) => "Structures, each checked against the world (strongholds: about here)".to_string(),
             Some((_, false)) => "Structures the seed makes possible: hollow, their biome is not checked".to_string(),
             None => format!("Structures{need}"),
         };
@@ -374,6 +443,7 @@ impl State {
         label: &mut Option<String>,
     ) {
         let [w, h] = self.gui;
+        self.explore.picks.clear();
         let (min, max) = (self.block_at(view, [0.0, 0.0]), self.block_at(view, [w, h]));
         let (min, max) = ([min[0].floor() as i32, min[1].floor() as i32], [max[0].ceil() as i32, max[1].ceil() as i32]);
         let dim = Dimension::from_key(&self.dim);
@@ -458,6 +528,8 @@ impl State {
                 }
             }
             mark(draw, *at, rgb, m.status, 3.0);
+            // Named as its set is ("Ocean Monument", "Village"): what a waypoint should say.
+            self.explore.picks.push((*at, m.pos, m.set.def().label.to_string()));
             if (mouse[0] - at[0]).abs() <= 5.0 && (mouse[1] - at[1]).abs() <= 5.0 {
                 *tip = Some(words(m, checked));
                 *label = Some(short(m));
@@ -581,8 +653,14 @@ impl State {
     }
 }
 
-/// The server half, in the integrated server only: builds the verifier from the seed and makes
-/// the lookups it plans, at most two a tick (a hook call that runs long stops the whole mod).
+/// The server half, in the integrated server only: builds the verifier from the seed and checks
+/// one seed candidate a tick at most against the world.
+///
+/// A check never searches (`find_nearest_structure` runs the generator, and for strongholds
+/// places all 128 of them whatever the radius: in a real world one call ran past the hook's
+/// 100 ms and stopped the mod). It reads `structures_at` at the candidate's place in its chunk,
+/// a read that loads and builds nothing (None for a chunk not loaded: that candidate waits).
+/// Strongholds are not checked: they stay "about here" from the ring maths.
 pub fn server_tick(host: &mut dyn ServerHost, event: &mut ServerTickEvent<'_>) {
     if !matches!(event.phase, ServerTickPhase::ServerTickEnd { .. }) {
         return;
@@ -590,50 +668,112 @@ pub fn server_tick(host: &mut dyn ServerHost, event: &mut ServerTickEvent<'_>) {
     let tick = event.context.tick.get();
     let Ok(mut shared) = SHARED.try_lock() else { return };
     trace(format!("tick {tick}: server_tick"));
+    // No client in a world (it left, and this is the integrated server's last tick): nothing
+    // is built, so no seed reaches the next world.
+    if shared.world == 0 {
+        shared.verifier = None;
+        return;
+    }
+    if shared.built_for != shared.world {
+        shared.verifier = None;
+    }
     if shared.verifier.is_none() {
         let Some(seed) = host.level(Dimension::Overworld.key()).and_then(|l| l.seed(host)) else { return };
-        shared.verifier = Some(Verifier::new(seed, Budget::default()));
+        shared.verifier = Some(Verifier::new(seed, CHECK_BUDGET));
+        shared.built_for = shared.world;
     }
     let want = shared.want.take();
-    let sets = shared.sets.clone();
+    // The sets the client shows (none when all are switched off); strongholds are never checked.
+    let sets: Vec<SetId> = shared.sets.iter().copied().filter(|s| *s != SetId::Strongholds).collect();
     let Some(v) = shared.verifier.as_mut() else { return };
     if let Some((dim, center)) = want {
         v.retain_near(dim, center, 96);
-        v.request_area(dim, center, 64, &sets);
-        if dim == Dimension::Overworld && sets.contains(&SetId::Strongholds) {
-            v.request_strongholds(center, 1200);
+        // None, or strongholds alone: nothing to check (an empty list would ask for every set).
+        if !sets.is_empty() {
+            v.request_area(dim, center, 64, &sets);
         }
     }
-    // A lookup is the game's own work, and it counts against this call's 100 ms: while the
-    // world is still coming up, or the server is busy (new terrain being made), a lookup can
-    // wait behind that work for longer. So none in the first seconds, none while ticks run
-    // long, and one a tick at most.
-    if shared.warm < WARM_UP {
-        shared.warm += 1;
+    if shared.off {
         return;
     }
     let (_, average) = host.tick_stats();
     let times = host.tick_times();
+    // How long the tick of the last check took: well over the average, and checks stop here.
+    if let Some(at) = shared.checked.take()
+        && let Some(&ns) = times.get((at % 100) as usize)
+        && ns as f64 - average * 1.0e6 > CHECK_SLOW_NS
+    {
+        shared.off = true;
+        trace(format!("tick {tick}: a check took {} ms: checks stop", ns / 1_000_000));
+        return;
+    }
+    // While the world is coming up, or the server is busy, no check.
+    if shared.warm < WARM_UP {
+        shared.warm += 1;
+        return;
+    }
     let recent = (1..=3).filter_map(|back| times.get((tick.wrapping_sub(back) % 100) as usize)).max().copied();
     if average > BUSY_MS || recent.is_some_and(|ns| ns > (BUSY_MS * 2.0e6) as u64) {
         return;
     }
     let Some(v) = shared.verifier.as_mut() else { return };
-    if let Some(lookup) = v.take(tick) {
-        let Some(level) = host.level(lookup.dimension.key()) else { return };
-        trace(format!("tick {tick}: lookup {:?} at {:?} radius {}", lookup.structures, lookup.origin, lookup.radius));
-        let answer = lookup
-            .structures
-            .iter()
-            .find_map(|s| level.find_nearest_structure(host, s, StructureSearch::new(lookup.origin, lookup.radius)));
-        v.record(&lookup, answer.as_ref().map(|r| (r.structure.as_str(), r.position)));
+    let Some(lookup) = v.take(tick) else { return };
+    let Target::Candidate { set, .. } = lookup.target else { return };
+    let Some(level) = host.level(lookup.dimension.key()) else { return };
+    trace(format!("tick {tick}: check {set:?} at {:?}", lookup.origin));
+    match check(&*host, level, set, lookup.origin) {
+        Some(Some(id)) => v.record(&lookup, Some((&id, lookup.origin))),
+        Some(None) => v.record(&lookup, None),
+        None => v.defer(lookup),
     }
+    shared.checked = Some(tick);
     trace(format!("tick {tick}: done"));
+}
+
+/// Heights a check reads at, every 4 blocks of the level from `min` up to `top`, nearest the
+/// sea first: where most structures' boxes are.
+fn check_heights(min: i32, top: i32) -> Vec<i32> {
+    let mut ys: Vec<i32> = (min..top).step_by(4).collect();
+    ys.sort_by_key(|y| (y - 63).abs());
+    ys
+}
+
+/// Whether one of `set`'s structures starts at candidate `at`: Some(its id) when one is there,
+/// Some(None) when its chunk is loaded and none is, None when the chunk isn't loaded.
+fn check(host: &dyn ServerHost, level: mod_api::LevelRef, set: SetId, at: [i32; 3]) -> Option<Option<String>> {
+    let (min, height) = level.height(host)?;
+    let ours = |id: &str| set.def().structures.iter().any(|(s, _)| *s == id);
+    // The candidate's own column (a start's corner, with the set's locate offset), and the middle
+    // of its chunk.
+    let middle = [(at[0] & !15) + 8, (at[2] & !15) + 8];
+    for (x, z) in [(at[0], at[2]), (middle[0], middle[1])] {
+        for y in check_heights(min, min + height) {
+            let found = level.structures_at(host, [x, y, z])?;
+            if let Some(s) = found.iter().find(|s| ours(&s.structure)) {
+                return Some(Some(s.structure.clone()));
+            }
+        }
+    }
+    Some(None)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_left_world_lets_no_seed_through() {
+        let mut ex = Explore::default();
+        ex.enter();
+        let world = SHARED.lock().unwrap().world;
+        assert_ne!(world, 0);
+        ex.enter();
+        assert_ne!(SHARED.lock().unwrap().world, world, "each world its own number");
+        ex.leave();
+        let shared = SHARED.lock().unwrap();
+        assert_eq!((shared.world, shared.built_for), (0, 0));
+        assert!(shared.verifier.is_none());
+    }
 
     #[test]
     fn seeds_read_as_the_game_reads_them() {
@@ -654,6 +794,39 @@ mod tests {
         assert!(back.grid && !back.slime && back.structures);
         assert_eq!(back.sets, ex.sets);
         assert!(back.sets.contains(&SetId::Mineshafts) && !back.sets.contains(&SetId::Villages));
+    }
+
+    #[test]
+    fn all_sets_switched_off_show_none_and_stay_off() {
+        let mut ex = Explore { structures: true, ..Explore::default() };
+        for i in 0..SetId::ALL.len() {
+            if ex.sets.contains(&SetId::ALL[i]) {
+                ex.flip_set(i);
+            }
+        }
+        assert!(ex.sets.is_empty());
+        // Neither the seed's "possible" markers nor the checked ones (a verifier for the seed).
+        let checked = Verifier::new(42, CHECK_BUDGET);
+        let (min, max) = ([0, 0], [31, 31]);
+        for verifier in [None, Some(&checked)] {
+            assert!(!shown_markers(42, verifier, Dimension::Overworld, min, max, &[SetId::Villages]).is_empty());
+            assert!(shown_markers(42, verifier, Dimension::Overworld, min, max, &ex.sets).is_empty());
+        }
+        // Saved as none, read back as none.
+        let text = ex.encode();
+        assert!(text.contains("sets=none\n"), "{text}");
+        let mut back = Explore::default();
+        back.decode(&text);
+        assert!(back.sets.is_empty());
+        // 0.4.0 wrote an empty list for all switched off: none too.
+        let mut old = Explore::default();
+        old.decode("grid=0\nslime=0\nstructures=1\nsets=\n");
+        assert!(old.sets.is_empty() && old.structures);
+        // A file without the line: the default sets.
+        let mut older = Explore::default();
+        older.decode("grid=1\nslime=0\nstructures=1\n");
+        assert_eq!(older.sets, Explore::default().sets);
+        assert!(!older.sets.is_empty());
     }
 
     #[test]

@@ -263,6 +263,11 @@ impl State {
                 return None;
             }
         }
+        // The eyes, over the face.
+        if let Some(eyes) = names.get(face.parts.len()) {
+            let part = face.parts[0];
+            draw.sprite(eyes, [0.0, 0.0, f32::from(part[2]), f32::from(part[3])], rects[0], tint);
+        }
         Some([fw, fh])
     }
 

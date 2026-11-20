@@ -1,8 +1,9 @@
 //! Small drawing helpers shared by the maps, the bubble and the HUD.
 use mod_api::DrawContext;
 
-// Vanilla's tooltip colours, which the bubbles wear.
-pub const BUBBLE_BG: u32 = 0xF010_0010;
+// Vanilla's tooltip colours, which the bubbles wear (the background opaque: nothing of the map
+// shows through a bubble or the icon picker).
+pub const BUBBLE_BG: u32 = 0xFF10_0010;
 pub const BUBBLE_EDGE_TOP: u32 = 0xFF50_28C8;
 pub const BUBBLE_EDGE_BOTTOM: u32 = 0xFF28_1464;
 /// The height of a bubble's pointer.
@@ -15,6 +16,15 @@ pub fn argb(rgb: u32) -> u32 {
 
 pub fn inside(rect: [f32; 4], at: [f32; 2]) -> bool {
     at[0] >= rect[0] && at[0] < rect[0] + rect[2] && at[1] >= rect[1] && at[1] < rect[1] + rect[3]
+}
+
+/// A waypoint as it is drawn everywhere (world map, minimap, list, labels, HUD), centred on
+/// `at`, about `half` GUI pixels from the centre to an edge. `faded` for one that is hidden or
+/// in another dimension. The one place that decides a waypoint's look (its icon, death,
+/// tracked, temporary): every view calls this.
+/// The shapes, items and faces and how each size is drawn are in `icons`.
+pub fn waypoint_icon(draw: &mut dyn DrawContext, wp: &crate::waypoints::Waypoint, at: [f32; 2], half: f32, faded: bool) {
+    crate::icons::draw_waypoint(draw, wp, at, half, faded);
 }
 
 /// A filled marker with a dark rim, centred on `at`.

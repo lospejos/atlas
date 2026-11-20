@@ -22,6 +22,10 @@ const MAGIC: &[u8; 4] = b"MMR2";
 pub const BIOME_CELL: i32 = 4;
 const BIOME_SIDE: usize = (REGION / BIOME_CELL) as usize;
 const BIOME_CELLS: usize = BIOME_SIDE * BIOME_SIDE;
+/// The most bytes a region file can hold: six planes packed at their worst (a control byte for
+/// every 128 literal ones) and their headers. A longer file is no region and is never read
+/// (it could take long to read, inside a hook's budget).
+const FILE_MAX: usize = 6 * (CELLS + CELLS / 128 + 8) + 16;
 
 pub struct Region {
     pub color: Vec<u8>,
@@ -81,6 +85,9 @@ impl Region {
     /// Reads either format; a 0.2 file comes back with no tints and no biomes, and is written
     /// in the new format the next time it changes.
     fn decode(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() > FILE_MAX {
+            return None;
+        }
         let (mut at, v2) = match (bytes.strip_prefix(MAGIC), bytes.strip_prefix(MAGIC_V1)) {
             (Some(at), _) => (at, true),
             (_, Some(at)) => (at, false),
@@ -153,23 +160,38 @@ fn pack(plane: &[u8], out: &mut Vec<u8>) {
     out[start..start + 4].copy_from_slice(&len.to_le_bytes());
 }
 
+/// One plane of `cells` bytes; None for anything else. Never makes more than `cells` bytes,
+/// whatever the file says (a run past the end is an error, not a bigger plane).
 fn unpack(at: &mut &[u8], cells: usize) -> Option<Vec<u8>> {
     let len = u32::from_le_bytes(at.get(..4)?.try_into().ok()?) as usize;
-    let mut src = at.get(4..4 + len)?;
-    *at = &at[4 + len..];
+    let end = len.checked_add(4)?;
+    let mut src = at.get(4..end)?;
+    *at = &at[end..];
     let mut out = Vec::with_capacity(cells);
     while let Some((&control, rest)) = src.split_first() {
+        let n = if control < 128 { control as usize + 1 } else { control as usize - 126 };
+        if out.len() + n > cells {
+            return None;
+        }
         if control < 128 {
-            let n = control as usize + 1;
             out.extend_from_slice(rest.get(..n)?);
             src = &rest[n..];
         } else {
             let b = *rest.first()?;
-            out.resize(out.len() + control as usize - 126, b);
+            out.resize(out.len() + n, b);
             src = &rest[1..];
         }
     }
     (out.len() == cells).then_some(out)
+}
+
+/// What reading a region's file gave.
+enum Read {
+    Region(Region),
+    /// No file there.
+    Missing,
+    /// A file that could not be read or is no region.
+    Broken,
 }
 
 #[inline]
@@ -188,6 +210,9 @@ struct Files(&'static dyn ConfigFiles);
 unsafe impl Send for Files {}
 unsafe impl Sync for Files {}
 
+/// Changed regions an eviction writes at most in one call.
+const EVICT_WRITES: usize = 2;
+
 pub struct Store {
     /// At most this many regions stay in memory (about 1.3 MiB each).
     keep: usize,
@@ -199,6 +224,11 @@ pub struct Store {
     on_disk: HashSet<(i32, i32)>,
     /// Regions asked for and not read yet.
     wanted: Vec<(i32, i32)>,
+    /// Regions whose file is there and could not be read (or is far too big): left as they
+    /// are, never read again nor written this session.
+    broken: HashSet<(i32, i32)>,
+    /// Set when a region was found broken; the owner says so once and clears it.
+    pub broke: bool,
     clock: u64,
     /// Bumped whenever a column or a loaded region changes: what was drawn from it is stale.
     pub revision: u64,
@@ -219,6 +249,8 @@ impl Store {
             regions: HashMap::new(),
             on_disk: HashSet::new(),
             wanted: Vec::new(),
+            broken: HashSet::new(),
+            broke: false,
             clock: 0,
             revision: 0,
         }
@@ -265,27 +297,43 @@ impl Store {
     /// The region, read from its file now when it isn't in memory.
     pub fn load(&mut self, key: (i32, i32)) -> Option<&Region> {
         if !self.regions.contains_key(&key) {
-            if !self.on_disk.contains(&key) {
+            if !self.on_disk.contains(&key) || self.broken.contains(&key) {
                 return None;
             }
-            let region = self.read(key)?;
+            let region = match self.read(key) {
+                Read::Region(region) => region,
+                Read::Missing => {
+                    self.on_disk.remove(&key);
+                    return None;
+                }
+                Read::Broken => {
+                    self.mark_broken(key);
+                    return None;
+                }
+            };
             self.insert(key, region);
         }
         self.touch(key);
         self.regions.get(&key)
     }
 
-    /// Opens `dir`'s regions, forgetting the ones in memory (save them first).
+    /// Opens `dir`'s regions in a store that holds none: [`take`](Self::take) an open one first.
     pub fn open(&mut self, files: &'static dyn ConfigFiles, dir: String) {
+        debug_assert!(!self.dirty(), "opened over unsaved regions");
         self.close();
         if let Ok(folder) = ConfigPath::new(&dir) {
             let mut after: Option<String> = None;
             while let Ok(page) = files.list(&folder, after.as_deref(), 512) {
+                crate::TIMING_COUNT[2].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let Some(last) = page.last() else { break };
                 after = Some(last.name.clone());
                 for entry in &page {
                     if let Some(key) = parse_name(&entry.name) {
                         self.on_disk.insert(key);
+                        if entry.stat.len > FILE_MAX as u64 {
+                            self.broken.insert(key);
+                            self.broke = true;
+                        }
                     }
                 }
             }
@@ -295,15 +343,42 @@ impl Store {
         self.revision += 1;
     }
 
-    /// Writes what changed and forgets everything.
+    /// Forgets everything, written or not: [`take`](Self::take) a store to keep what changed.
     pub fn close(&mut self) {
-        // What the caller has not written by now gets a few regions' worth of time, no more.
-        self.save(6);
         self.regions.clear();
         self.on_disk.clear();
         self.wanted.clear();
+        self.broken.clear();
         self.dir = None;
         self.revision += 1;
+    }
+
+    pub fn loaded(&self) -> usize {
+        self.regions.len()
+    }
+
+    /// The store as it is, regions, files and all, leaving this one closed. What changed in
+    /// it is written by whoever holds it now, a region at a time (`save(1)`): a hook call has
+    /// no time to write many at once.
+    pub fn take(&mut self) -> Store {
+        let mut fresh = Store::keeping(self.keep);
+        fresh.revision = self.revision + 1;
+        std::mem::replace(self, fresh)
+    }
+
+    /// The folder it is open on.
+    pub fn dir(&self) -> Option<&str> {
+        self.dir.as_deref()
+    }
+
+    /// Marks everything drawn from it stale: for a store taken back into use.
+    pub fn bump(&mut self) {
+        self.revision += 1;
+    }
+
+    /// Whether a region in memory changed since it was written.
+    pub fn dirty(&self) -> bool {
+        self.regions.iter().any(|(k, r)| r.dirty && !self.broken.contains(k))
     }
 
     pub fn is_open(&self) -> bool {
@@ -318,7 +393,11 @@ impl Store {
 
     /// Queues `key` for reading when it has a file and isn't in memory.
     pub fn want(&mut self, key: (i32, i32)) {
-        if self.on_disk.contains(&key) && !self.regions.contains_key(&key) && !self.wanted.contains(&key) {
+        if self.on_disk.contains(&key)
+            && !self.broken.contains(&key)
+            && !self.regions.contains_key(&key)
+            && !self.wanted.contains(&key)
+        {
             self.wanted.push(key);
         }
     }
@@ -336,14 +415,19 @@ impl Store {
         let mut loaded = false;
         for _ in 0..budget {
             let Some(key) = self.wanted.pop() else { break };
-            if self.regions.contains_key(&key) {
+            if self.regions.contains_key(&key) || self.broken.contains(&key) {
                 continue;
             }
-            if let Some(region) = self.read(key) {
-                self.insert(key, region);
-                loaded = true;
-            } else {
-                self.on_disk.remove(&key);
+            match self.read(key) {
+                Read::Region(region) => {
+                    self.insert(key, region);
+                    loaded = true;
+                }
+                // Gone since the folder was listed: nothing there to keep.
+                Read::Missing => {
+                    self.on_disk.remove(&key);
+                }
+                Read::Broken => self.mark_broken(key),
             }
         }
         if loaded {
@@ -356,9 +440,22 @@ impl Store {
         ConfigPath::new(&format!("{}/r.{}.{}.bin", self.dir.as_ref()?, key.0, key.1)).ok()
     }
 
-    fn read(&self, key: (i32, i32)) -> Option<Region> {
-        let bytes = self.files?.0.read(&self.path(key)?).ok()?;
-        Region::decode(&bytes)
+    /// Reads region `key`'s file. Only a file that is not there is `Missing`: one that could
+    /// not be read or decoded is `Broken`, and must not be written over with an empty region.
+    fn read(&self, key: (i32, i32)) -> Read {
+        let (Some(files), Some(path)) = (self.files, self.path(key)) else { return Read::Broken };
+        crate::TIMING_COUNT[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        match files.0.read(&path) {
+            Ok(bytes) => Region::decode(&bytes).map_or(Read::Broken, Read::Region),
+            Err(mod_api::ConfigFileError::NotFound) => Read::Missing,
+            Err(_) => Read::Broken,
+        }
+    }
+
+    fn mark_broken(&mut self, key: (i32, i32)) {
+        self.broken.insert(key);
+        self.regions.remove(&key);
+        self.broke = true;
     }
 
     fn insert(&mut self, key: (i32, i32), mut region: Region) {
@@ -366,30 +463,68 @@ impl Store {
         region.used = self.clock;
         self.regions.insert(key, region);
         if self.regions.len() > self.keep {
-            self.evict();
+            self.evict(key);
         }
     }
 
-    /// Drops the regions used longest ago, writing the changed ones first.
-    fn evict(&mut self) {
+    /// Drops the regions used longest ago. A changed one is written first, but at most
+    /// `EVICT_WRITES` a call (a write is a few ms, and this runs inside a hook's scan): the
+    /// others stay in memory, a little over `keep`, until the periodic saves have written them.
+    fn evict(&mut self, newest: (i32, i32)) {
         let mut by_age: Vec<((i32, i32), u64)> = self.regions.iter().map(|(k, r)| (*k, r.used)).collect();
         by_age.sort_by_key(|e| e.1);
-        for (key, _) in by_age.into_iter().take(self.regions.len().saturating_sub(self.keep.saturating_sub(8))) {
-            self.save_region(key);
+        let mut over = self.regions.len().saturating_sub(self.keep.saturating_sub(8));
+        let mut writes = 0;
+        for (key, _) in by_age {
+            if over == 0 {
+                break;
+            }
+            if key == newest {
+                continue;
+            }
+            let dirty = self.regions.get(&key).is_some_and(|r| r.dirty) && !self.broken.contains(&key);
+            if dirty {
+                // Past twice `keep` (writes keep failing: a full disk) one is dropped unwritten,
+                // as memory has to end somewhere.
+                let must = self.regions.len() > 2 * self.keep;
+                let written = writes < EVICT_WRITES && {
+                    writes += 1;
+                    self.save_region(key)
+                };
+                if !written && !must {
+                    continue;
+                }
+            }
             self.regions.remove(&key);
+            over -= 1;
         }
     }
 
-    /// The region for writing a scanned column: read from its file or made empty.
-    fn region_mut(&mut self, key: (i32, i32)) -> &mut Region {
+    /// The region for writing a scanned column: read from its file or made empty. None for a
+    /// region whose file could not be read: nothing is written into it, so it is never saved.
+    fn region_mut(&mut self, key: (i32, i32)) -> Option<&mut Region> {
+        if self.broken.contains(&key) {
+            return None;
+        }
         if !self.regions.contains_key(&key) {
-            let region = if self.on_disk.contains(&key) { self.read(key) } else { None };
-            self.insert(key, region.unwrap_or_else(Region::empty));
+            let region = if self.on_disk.contains(&key) {
+                match self.read(key) {
+                    Read::Region(region) => region,
+                    Read::Missing => Region::empty(),
+                    Read::Broken => {
+                        self.mark_broken(key);
+                        return None;
+                    }
+                }
+            } else {
+                Region::empty()
+            };
+            self.insert(key, region);
         }
         self.clock += 1;
-        let region = self.regions.get_mut(&key).expect("just inserted");
+        let region = self.regions.get_mut(&key)?;
         region.used = self.clock;
-        region
+        Some(region)
     }
 
     /// Writes one scanned chunk's 256 columns (`z * 16 + x`). True when anything changed.
@@ -406,7 +541,7 @@ impl Store {
             return false;
         }
         let (key, base) = split(chunk.0 * 16, chunk.1 * 16);
-        let region = self.region_mut(key);
+        let Some(region) = self.region_mut(key) else { return false };
         let mut changed = false;
         for z in 0..16 {
             let row = base + z * REGION as usize;
@@ -445,7 +580,7 @@ impl Store {
             return;
         }
         let (key, i) = biome_split(x, z);
-        let region = self.region_mut(key);
+        let Some(region) = self.region_mut(key) else { return };
         if region.biome[i] != biome {
             region.biome[i] = biome;
             region.dirty = true;
@@ -473,10 +608,11 @@ impl Store {
 
     fn save_region(&mut self, key: (i32, i32)) -> bool {
         let Some(region) = self.regions.get(&key) else { return false };
-        if !region.dirty {
+        if !region.dirty || self.broken.contains(&key) {
             return false;
         }
         let (Some(files), Some(path)) = (self.files, self.path(key)) else { return false };
+        crate::TIMING_COUNT[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let ok = files.0.write(&path, &region.encode()).is_ok();
         if ok {
             self.on_disk.insert(key);
@@ -492,7 +628,7 @@ impl Store {
         let dirty: Vec<(i32, i32)> = self
             .regions
             .iter()
-            .filter(|(_, r)| r.dirty)
+            .filter(|(k, r)| r.dirty && !self.broken.contains(k))
             .map(|(k, _)| *k)
             .take(budget)
             .collect();
@@ -652,6 +788,64 @@ mod tests {
             assert_ne!(legend.tint_index(i * 0x030507), 0);
         }
         assert_eq!(legend.tints().count(), 256);
+    }
+
+    #[test]
+    fn a_bad_file_never_makes_a_big_plane() {
+        // A run of 129 bytes, again and again, says far more than a plane holds.
+        let mut bomb = Vec::new();
+        let runs = 40_000u32;
+        bomb.extend_from_slice(&(runs * 2).to_le_bytes());
+        for _ in 0..runs {
+            bomb.extend_from_slice(&[255, 7]);
+        }
+        let mut at = &bomb[..];
+        assert!(unpack(&mut at, CELLS).is_none());
+        let mut file = MAGIC.to_vec();
+        file.extend_from_slice(&bomb);
+        assert!(Region::decode(&file).is_none());
+        // A length past the end, and one that wraps round.
+        let mut at: &[u8] = &[0xFF, 0xFF, 0xFF, 0xFF, 1, 2];
+        assert!(unpack(&mut at, 4).is_none());
+        // Too long to be a region at all.
+        let mut huge = Region::empty().encode();
+        huge.resize(FILE_MAX + 1, 0);
+        assert!(Region::decode(&huge).is_none());
+        // The worst a real plane packs to still fits.
+        let noise: Vec<u8> = (0..CELLS).map(|i| (i * 7 % 251) as u8 ^ (i >> 3) as u8).collect();
+        assert!(6 * (packed_len(&noise) + 4) + 9 <= FILE_MAX);
+    }
+
+    #[test]
+    fn a_broken_region_is_never_written() {
+        let mut store = Store::keeping(8);
+        store.open_memory();
+        store.on_disk.insert((0, 0));
+        store.broken.insert((0, 0));
+        assert!(!store.put_chunk((0, 0), &[5; 256], &[64; 256], &[0; 256], None));
+        store.put_biome(1, 1, 3);
+        assert!(store.region((0, 0)).is_none() && store.load((0, 0)).is_none());
+        assert_eq!(store.save(10), 0);
+        // Its neighbour is written as ever.
+        assert!(store.put_chunk((40, 0), &[5; 256], &[64; 256], &[0; 256], None));
+    }
+
+    #[test]
+    fn eviction_never_drops_a_changed_region_it_could_not_write() {
+        // No files behind it: nothing can be written, so every changed region stays.
+        let mut store = Store::keeping(10);
+        store.open_memory();
+        for i in 0..20 {
+            assert!(store.put_chunk((i * 32, 0), &[5; 256], &[64; 256], &[0; 256], None));
+        }
+        assert_eq!(store.loaded(), 20);
+        assert!(store.dirty());
+        // A layer taken away keeps them all for whoever writes them; the one left is empty.
+        let revision = store.revision;
+        let taken = store.take();
+        assert_eq!(taken.loaded(), 20);
+        assert!(taken.dirty() && taken.dir() == Some("mem"));
+        assert!(!store.dirty() && !store.is_open() && store.revision > revision);
     }
 
     #[test]

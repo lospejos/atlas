@@ -384,7 +384,9 @@ impl State {
         let on_map = matches!(self.ui, Ui::Map | Ui::Edit(crate::bubble::Edit { from_map: true, .. }));
         match (on_map, self.view, self.player) {
             (true, Some(view), _) => self.refresh_map(host, view, look),
-            (false, _, Some(player)) if self.config.minimap => self.refresh_minimap(host, player, look),
+            (false, _, Some(player)) if self.config.minimap && !self.hud.hidden => {
+                self.refresh_minimap(host, player, look)
+            }
             _ => {}
         }
     }
@@ -420,12 +422,18 @@ impl State {
             _ if zooming || (crate::TEST && self.probe.v02) => around,
             _ => self.map_frame(aim, [0.0; 2], MAP_MARGIN),
         };
-        // Everything stored for the frame is read before it is painted (30 ms a frame at most):
-        // a layer just switched to comes in whole, the image of the one left showing meanwhile.
-        let start = host.millis();
+        // Everything stored for the frame is read before it is painted (in the frame's time
+        // for work, a region at least): a layer just switched to comes in whole over a few
+        // frames, the image of the one left showing meanwhile.
         let (min, max) = frame.blocks();
+        let until = self.until;
         let store = if look.cave.is_some() { &mut self.cave } else { &mut self.surface };
-        if !store.load_area(min, max, || host.millis().saturating_sub(start) < 30) {
+        let mut first = true;
+        if !store.load_area(min, max, || std::mem::take(&mut first) || host.millis() < until) {
+            return;
+        }
+        if host.millis() >= until + 2 * crate::FRAME_WORK_MS {
+            // Painting the whole image as well would make this frame's call too long.
             return;
         }
         let mut pixels = std::mem::take(&mut self.pixels);

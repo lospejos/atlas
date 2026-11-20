@@ -21,6 +21,8 @@ pub struct Export {
     /// Under the mod's data folder.
     path: String,
     strip: Vec<u8>,
+    /// How many of the next strip's regions are read: they come in over several frames.
+    loaded: usize,
 }
 
 impl State {
@@ -71,7 +73,7 @@ impl State {
         };
         let clean = |s: &str| s.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "_");
         let path = format!("export/{}-{}-{layer}.png", clean(&world), clean(&self.dim));
-        self.export = Some(Export { png: Png::new(frame.w, frame.h), frame, cave, path, strip: Vec::new() });
+        self.export = Some(Export { png: Png::new(frame.w, frame.h), frame, cave, path, strip: Vec::new(), loaded: 0 });
     }
 
     /// Draws the next rows of a running export; writes the file when the last is in.
@@ -86,15 +88,36 @@ impl State {
         let from = e.png.rows();
         let rows = (BUDGET / f.w.max(1)).clamp(1, 64).min(f.h - from);
         let strip = Frame { z0: f.z0 + from as i32 * f.step, h: rows, ..f };
-        let tints = std::mem::take(&mut self.tints);
+        let until = self.until;
         let store = if e.cave.is_some() { &mut self.cave } else { &mut self.surface };
-        // The regions these rows and the row north of them are in, read now.
+        // The regions these rows and the row north of them are in: read in the frames' time
+        // for work (a region a frame at least), then painted. Each is read once per strip.
         let last_z = strip.z0 + (rows as i32 - 1) * f.step;
-        for rz in (strip.z0 - f.step).div_euclid(REGION)..=last_z.div_euclid(REGION) {
-            for rx in f.x0.div_euclid(REGION)..=(f.x0 + (f.w as i32 - 1) * f.step).div_euclid(REGION) {
-                store.load((rx, rz));
+        let needed: Vec<(i32, i32)> = ((strip.z0 - f.step).div_euclid(REGION)..=last_z.div_euclid(REGION))
+            .flat_map(|rz| {
+                (f.x0.div_euclid(REGION)..=(f.x0 + (f.w as i32 - 1) * f.step).div_euclid(REGION))
+                    .map(move |rx| (rx, rz))
+            })
+            .collect();
+        let first = e.loaded;
+        while e.loaded < needed.len() {
+            if e.loaded > first && host.millis() >= until {
+                self.export = Some(e);
+                return;
             }
+            store.load(needed[e.loaded]);
+            e.loaded += 1;
         }
+        if e.loaded > first && host.millis() >= until {
+            // Read this frame: painted in the next.
+            self.export = Some(e);
+            return;
+        }
+        for key in &needed {
+            store.touch(*key);
+        }
+        e.loaded = 0;
+        let tints = std::mem::take(&mut self.tints);
         e.strip.clear();
         e.strip.resize(f.w * rows * 4, 0);
         let table: &[render::Tints] = if self.config.tints { &tints } else { &[] };

@@ -255,6 +255,16 @@ impl Verifier {
         Some(lookup)
     }
 
+    /// Put `lookup` back at the end of the queue unanswered (its chunk is not loaded yet): it
+    /// comes round again after the others, unless `retain_near` drops it first.
+    pub fn defer(&mut self, lookup: Lookup) {
+        let key = (lookup.dimension, lookup.target);
+        if self.verdicts.contains_key(&key) || !self.queued.insert(key) {
+            return;
+        }
+        self.queue.push_back(lookup);
+    }
+
     /// Store the server's answer for `lookup`: the first `Some((structure, position))` of its
     /// structures, or `None`.
     pub fn record(&mut self, lookup: &Lookup, answer: Option<(&str, [i32; 3])>) {
@@ -548,6 +558,24 @@ mod tests {
             m.iter().filter(|m| m.status == Status::Approximate).count(),
             2
         );
+    }
+
+    #[test]
+    fn a_deferred_lookup_comes_last() {
+        let mut v = Verifier::new(7, Budget { per_second: 1000, per_tick: 1000 });
+        v.request_area(Dimension::Overworld, [0, 0], 40, &[SetId::Villages]);
+        let n = v.pending();
+        let first = v.take(1).unwrap();
+        v.defer(first);
+        assert_eq!(v.pending(), n);
+        let mut last = None;
+        while let Some(l) = v.take(1) {
+            last = Some(l);
+        }
+        assert_eq!(last, Some(first));
+        v.record(&first, None);
+        v.defer(first);
+        assert_eq!(v.pending(), 0, "an answered one is not queued again");
     }
 
     #[test]

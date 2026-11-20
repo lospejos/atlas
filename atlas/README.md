@@ -1,4 +1,4 @@
-# Atlas (`atlas`) 0.3.4
+# Atlas (`atlas`) 0.4.0
 
 A client-side wasm mod for Horizon: a minimap, a full-screen world map of everything you have
 explored (surface, cave layers, the Nether under and over its roof), an entity radar, waypoints
@@ -14,7 +14,16 @@ there (see "Moving from my_map").
 - **Minimap.** Square, north up, top right by default (unchanged from 0.2). Options: round, turning
   with you, any of the four corners, size, zoom, a second line with the Nether / Overworld
   coordinates. Terrain in map colours with height and water-depth shading, your arrow, waypoints
-  (on the edge when they are off the map), entity dots, structure markers.
+  (on the edge when they are off the map, wholly inside it), entity faces, structure markers.
+  **[ / ]** zoom it a step in or out (a short "2x" hint shows, the step is kept as the setting);
+  **hold Z** to enlarge it (2.2x, as far as the screen has room) while held. It hides itself
+  under F3 when F3's text is in its corner, and in menus and chat (settings).
+- **Compass bar** (setting, off by default): a slim strip at the top centre, as wide as the
+  hotbar, with N / E / S / W and ticks sliding past as you turn and this dimension's waypoints
+  at their bearings (each as its icon; the nearest wins where two would overlap). The tracked
+  waypoint is a little larger with its name and distance under it in the labels' small type; out
+  of view it becomes an arrow at the bar's end to turn towards. Boss bars move down under it. The
+  enlarged minimap fades it out when it would reach over it.
 - **World map (M).** Drag to move, wheel to zoom about the cursor (unchanged: 1.15x a notch, eased),
   **Space** slides back to you in a quarter of a second. The bottom lines show your position and
   what is under the cursor: X Z Y, the **biome**, and the matching **Nether / Overworld**
@@ -39,16 +48,46 @@ there (see "Moving from my_map").
   definition that tells the game which rectangle of which of its entity textures to cut out
   (`unstitch`), registered through `register_texture_atlases`; a resource pack's mobs get their
   own faces.
-- **Waypoints.** Right-click the map or press J: the bubble asks for a name and a colour. **J in
+- **Waypoints.** Right-click the map or press J: the bubble asks for a name, the exact **X Y Z**
+  (filled in; Tab moves between the fields, a field that is no number turns red and is not
+  saved), a colour, an **icon**, and two switches: **Beam** (on) and **Temporary** (off). **J in
   the world puts the waypoint on the block the crosshair is on** (up to 256 blocks away) and the
-  bubble points at that block; with nothing aimed at it is a plain box that says "Where you stand". Click a
-  marker, or right-click a row of the list: the same bubble with **Move here, Hide / Show,
-  Track / Untrack, Link, Share, Delete**; typing renames, a swatch recolours (Enter keeps the name).
+  bubble points at that block; with nothing aimed at it is a plain box that says "Where you stand".
+  **Shift+J** opens it with Temporary on. Click a marker, or right-click a row of the list: the
+  same bubble with **Move here, Hide / Show, Track / Untrack, Link, Share, Delete**; typing
+  renames, a swatch, a switch or an icon applies at once (Enter keeps the name and place).
   The list is this dimension's nearest first, then the other dimensions' greyed with their
-  dimension. Click a row to slide there, its `x` deletes.
+  dimension; a **search box** over it filters by name. Click a row to slide there, its beam glyph
+  switches that waypoint's beam, its `x` deletes.
+  - **Icons.** The square at the end of the colours shows the waypoint's icon; a click opens the
+    **icon picker** beside the bubble: a search box over a grid of pixel shapes (home, star,
+    flag, portal, skull, pin, heart, pickaxe, cross; drawn in the waypoint's colour), the 92 mob
+    faces and every item of the game. Type to search ("ender" finds the enderman, the dragon,
+    pearls, eyes...), wheel or arrows to scroll, click (or Enter for the first found) to choose,
+    Esc closes the picker. The default is a diamond, a cross for a death. Shapes are this mod's
+    own patterns, items and faces are the game's own pictures drawn at runtime. A face whose look
+    is partly in a glowing layer (the enderman's purple eyes, the copper golem's) gets that layer
+    drawn over it. Every view (map, minimap, list, labels, compass) draws a waypoint the same way:
+    a tracked one has a white ring, a temporary one is an outline round a dark middle (a face's
+    rim and an item's dotted edge in its colour), a hidden one or one in another dimension dimmed.
+  - **Beams** stand at every waypoint (switch per waypoint, and all at once on the map's bar). They
+    fade out near you ("Hide beam within", 16 blocks) and past "Max beam distance".
+  - **Temporary** waypoints delete themselves when you get within 3 blocks.
+  - **Deaths**: the last 1, 3 or 5 deaths are kept ("Death", "Death 2", ...), also with the
+    `immediate_respawn` game rule (the client never sees its health at 0 then: the death is
+    added on the respawn, where you last stood). A bubble or a click holds its waypoint by an id
+    the game session gives it, not by its place in the list: a death or a reached temporary
+    waypoint while a bubble is open never makes it save into, or delete, another one.
+  - **`/atlas add <name> <x> <y> <z> [dimension]`** adds one from chat (`~` for your own
+    coordinate, `~5` relative; a name of several words, or in double quotes; dimension
+    `overworld`, `nether`, `end` or an id).
   - **Link** creates the matching waypoint in the Nether (÷8) or the Overworld (×8): portal planning.
   - **Share** sends `[Atlas] name @ x y z dimension` to chat. Such a line from anyone gets an
-    `[Import]` to click (it runs `/atlas import`), a line on the HUD, and a row in the list (Add / x).
+    `[Import]` to click (it adds that line's waypoint alone: `/atlas import <number>`), a line on
+    the HUD, and a row in the list (Add / x). Typed, `/atlas import` adds all that wait. At most 20
+    wait, 5 from one sender: a newer one pushes the oldest out. A `§` (formatting code) or a
+    control character never goes into a name, so a shared name cannot get you kicked; a shared
+    place past the world border (30,000,000 across, 20,000 up or down) is not taken.
   - **Track** points the **direction arrow** at the top of the screen to it, with its distance
     (setting "Direction arrow", off until you track something).
   - **Spawn** and **Bed** waypoints are kept automatically (settings; single player and LAN host,
@@ -60,8 +99,11 @@ there (see "Moving from my_map").
   shown on the map and in chat.
 - **Explore overlays** (from `mods/atlas-explore`): chunk and region **grid**; **slime chunks**
   (exact from the seed); **structures**. In single player / as LAN host the seed is read by the
-  mod's half in the integrated server and every candidate is checked against the world: solid
-  markers are real. On someone else's server type the seed in **Filter**: slime chunks are exact,
+  mod's half in the integrated server and every candidate in a loaded chunk is checked against
+  the world (one a server tick, a read that loads and builds nothing): solid markers are real.
+  Strongholds are not checked anywhere: they are *about here* from the ring maths (the game's
+  stronghold search places all 128 at once, which in a real world ran past a hook's 100 ms and
+  stopped the mod). On someone else's server type the seed in **Filter**: slime chunks are exact,
   structures are *possible* (hollow markers: the biome is not checked), strongholds *about here*
   (ring of 128 blocks). Filter also has a switch per structure type.
 
@@ -71,24 +113,43 @@ there (see "Moving from my_map").
 |---|---|
 | **N** | minimap on / off |
 | **M** | world map |
-| **J** | new waypoint where you stand |
+| **J** | new waypoint (on the aimed block, else where you stand) |
+| **Shift+J** | new temporary waypoint |
+| **[** / **]** | minimap zoom in / out |
+| **Z** (hold) | enlarge the minimap |
 
 On the world map: drag, wheel, right-click (new waypoint), click a marker (edit), Space (to you),
-Esc or M (close). In the bubble: Enter saves, Esc cancels, Tab next colour, Delete deletes.
+Esc or M (close). In the bubble: Enter saves, Esc cancels, **Tab / Shift+Tab move between the name
+and X, Y, Z**, Delete (in the name) deletes. With the icon picker open the typing goes to its
+search, Esc closes the picker first.
 
 ## Settings (Options > Mods > Atlas)
 
 Show minimap, size (48-200), zoom (4x-1/4x), corner, round, turns with you, coordinates,
-Nether / Overworld coordinates (off), map layer (Auto), biome colours (on), radar hostile /
-animals / players / items (on), radar style (faces / dots), radar names on hover (on), beams, labels, names only on hover, death / spawn / bed waypoints
-(on), direction arrow (off). The explore overlays and the structure filter are kept in
+Nether / Overworld coordinates (off), hide under F3 (on), hide in menus and chat (on), map layer
+(Auto), biome colours (on), radar hostile / animals / players / items (on), radar style (faces /
+dots), radar names on hover (on), waypoint beams (on), hide beam within (off, 8, 16, 32, 64
+blocks; 16), max beam distance (500 to 10000 blocks, unlimited), waypoint labels (on), names only
+on hover (off), death waypoint (on), deaths kept (1, 3, 5; 3), spawn / bed waypoints (on),
+direction arrow (off), compass bar (off). The explore overlays and the structure filter are kept in
 `horizon-mod-data/atlas/explore.txt`, a typed seed in `<world>/seed.txt`.
 
 ## Files (`horizon-mod-data/atlas/` in the game folder)
 
-- `sp/w_<save folder>_/` or `mp/w_<server address>_/` per world, in it:
+- `sp/w_<save folder>_/` or `mp/w_<server address>_/` per world (every character but letters,
+  digits, `.`, `-` and `_` becomes `_`; a name with characters past ASCII, `Haus ä`, gets a hash of
+  the whole name after it, `w_Haus___1a2b3c4d`, so `Haus ä` and `Haus ö` are two folders, unless
+  the folder 0.4 and before used, `w_Haus___`, is already there: that one is kept), in it:
   - `waypoints.txt`: one a line, tab separated: x, y, z, colour, flags (1 death, 2 hidden, 4 spawn,
-    8 bed, 16 tracked), dimension, name. 0.2's file reads as it is.
+    8 bed, 16 tracked, 32 beam off, 64 temporary), dimension, name, and an optional eighth column,
+    the icon: `shape:<name>` (`shape:home`), `item:<item id>` (`item:minecraft:ender_pearl`) or
+    `mob:<entity id>` (`mob:minecraft:enderman`); written only when set. 0.2's and 0.3's files
+    read as they are. A line Atlas cannot read is written back as it was, after the waypoints.
+    **Don't go back to 0.3.x after using 0.4**: 0.3 reads the icon column into the name and
+    drops the flags 32 (beam off) and 64 (temporary).
+  - A file that is there but cannot be read (`waypoints.txt`, `legend.txt`, a region) is never
+    written over: chat says so, and for that session the waypoints (or the map, or that region)
+    are not saved.
   - `legend.txt`: what the biome and tint numbers in the regions mean.
   - `<dimension>/r.<x>.<z>.bin`: the surface, 512 x 512 blocks a file; `<dimension>/cave.<n>/…`:
     the cave layer of heights 16n-16 to 16n+24.
@@ -103,7 +164,7 @@ Copy `horizon-mod-data/my_map` to `horizon-mod-data/atlas`, put `mod.atlas:true`
 `horizon-mods.txt` instead of `mod.my_map:true`. Two things to know:
 
 - **The first time a world opens the game says "Missing mods: 1 (my_map)"** and warns about removed
-  blocks. The mod never added a block; "Back Up and Open" is the safe choice. Seen in a
+  blocks. The mod never added a block; "Back Up and Open" is the safe choice. Seen in the hidden
   test.
 - Settings are kept per mod id: the minimap size, zoom and switches start from their defaults.
 
@@ -132,7 +193,7 @@ Copy `horizon-mod-data/my_map` to `horizon-mod-data/atlas`, put `mod.atlas:true`
 - **Server half.** A client mod's server hooks run in the integrated server of the same process:
   that is where the world spawn, the respawn point, the seed and the structure checks come from.
 
-## Performance (off-screen test machine, 1280 x 720, vsync off; test build's own timers)
+## Performance (hidden, this PC, 1280 x 720, vsync off; test build's own timers)
 
 | | |
 |---|---|
@@ -181,7 +242,7 @@ Copy `horizon-mod-data/my_map` to `horizon-mod-data/atlas`, put `mod.atlas:true`
 
 - **A hook call that runs past about 100 ms (wall clock) is cut off by the game and the whole mod
   is stopped until restart.** Everything here is sliced to stay far below (exports, saves on
-  leaving, lookups). It still happened once in about 17 test game runs, on the render thread during a
+  leaving, lookups). It still happened once in about 17 hidden game runs, on the render thread during a
   560 ms stall of the whole game on a loaded machine: not reproduced, cause outside the mod not
   proven. If the map ever goes dead, the log line is "wasm mod libatlas.so stopped its group".
 - **The image slot is shared by all mods** (one image for all): two mods painting it flicker.
@@ -194,9 +255,11 @@ Copy `horizon-mod-data/my_map` to `horizon-mod-data/atlas`, put `mod.atlas:true`
   not available to test in single player, their dots use the same path as mobs.
 - **Spawn / Bed waypoints**: the client is not told either. In single player and as LAN host the
   server half reads them. On a server there is no Spawn waypoint, and Bed is set where you stand
-  when chat says "Respawn point set" (English only).
-- **[Import] in chat** runs `/atlas import`; the command was tested, the click itself could not be
-  driven by the test tool.
+  when chat says "Respawn point set" (its translation key `block.minecraft.set_spawn`, or those
+  English words when a server sends plain text).
+- **[Import] in chat** runs `/atlas import <number>`; the command was tested, the click itself
+  could not be driven by the test tool. The number holds for this session: an older line's
+  [Import] says the waypoint is not waiting any more.
 - **PNG**: at most 40 regions (20,480 blocks) across and 8192 px a side (a larger area at 2 or 4
   blocks a pixel), under 64 MiB. Its edges are whole regions, so there is a transparent margin.
 - **Turning minimap** uploads a small image every frame the view turns (see the table).
@@ -204,15 +267,22 @@ Copy `horizon-mod-data/my_map` to `horizon-mod-data/atlas`, put `mod.atlas:true`
   real (wrong biome). Solid markers there are only the sets that need no biome (ruined portals).
 - **Biome colours** are stored as one of 255 tints per world (rounded to 4 a channel, nearest
   when full). Columns explored with 0.2 have no tint until they are read again.
-- Typing in the bubble and the seed field was checked through the test build's key path
-  (`horizon-ctl` sends no text to a mod's screen); the real path is `screen_char_typed_pre`.
+- Typing in the bubble's picker was tested on the real path (`horizon-ctl type` reaches a mod's
+  screen on this Nightly); the name and X Y Z fields through the test build's key path.
+- **Icons**: an item in an in-world label (and so in the compass's caption) is drawn only where a
+  label's font pixel is two screen pixels (a window 900 pixels high or more); smaller, an item
+  would blur, so it shows as the diamond there. Shapes at their smallest (7 texels) lose detail:
+  the skull's eyes and the star's points are simplified. A face bigger than its room is drawn at
+  a whole number of screen pixels a texel and may reach a pixel past a shape of the same size.
+- **Compass**: the enlarged minimap fades the bar out only while it would reach over it (narrow
+  windows, GUI scale 3 or more); the markers on the bar can't fade, so they go at half way.
 
 ## Building and testing
 
 ```sh
 cargo horizon-mod build --wasm
 cargo horizon-mod check target/horizon-mod/atlas.hmod
-cargo test     # 32 tests: formats, 0.2 files, drag, glide, slide, PNG, …
+cargo test --lib     # 62 tests: file formats, waypoints, icons, scrollbars, drag, PNG, …
 ```
 
 `TEST` in `src/lib.rs` (off in the shipped build) turns on `src/probe.rs`: it writes `probe.log`

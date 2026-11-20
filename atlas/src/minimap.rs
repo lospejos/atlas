@@ -13,13 +13,57 @@ use crate::mapview::{Image, Look, MARGIN};
 use crate::overlays::{OverlayMarker, OverlayQuery};
 use crate::render::{self, Frame};
 use crate::waypoints::distance_text;
-use crate::{FRAME_COLOR, Player, SPRITE, State, UNSEEN_COLOR};
+use crate::{FRAME_COLOR, ID, MINIMAP_ZOOMS, Player, SPRITE, State, UNSEEN_COLOR};
 
 /// With "names only on hover", a waypoint's label shows within this many GUI pixels of the
 /// crosshair, sideways.
 const AIM: f32 = 18.0;
 /// The image is painted again after this many milliseconds even when nothing changed.
 const REPAINT: u64 = 3000;
+
+/// Seconds the minimap takes to grow to its enlarged size, or back.
+const GROW_TIME: f32 = 0.14;
+/// How many times larger the minimap is while the enlarge key is held (as far as the screen
+/// has room). It shows more around you at the same zoom: a texel stays the size it was.
+const GROW: f32 = 2.2;
+/// The zoom steps' names, in the order of `MINIMAP_ZOOMS`.
+const ZOOM_LABELS: [&str; 5] = ["4x", "2x", "1x", "1/2x", "1/4x"];
+
+/// The minimap's keys and hiding, and the compass bar's place.
+#[derive(Default)]
+pub struct Hud {
+    /// How far the minimap has grown, 0 to 1, and whether the enlarge key is held.
+    pub grow: f32,
+    pub held: bool,
+    /// The zoom step the keys picked last, and when (frame clock), for the indicator.
+    pub zoomed: Option<(usize, f64)>,
+    /// The minimap was left out of the last draw (F3 in its corner, a screen open, F1).
+    pub hidden: bool,
+    /// GUI pixels the compass bar took at the top of the screen in the last draw: the boss
+    /// bars move down by as much.
+    pub compass_h: f32,
+    /// Where the minimap was drawn last, frame and lines under it, GUI pixels.
+    pub mini_rect: Option<[f32; 4]>,
+}
+
+/// Part `src` of the minimap's image (`w` x `h` texels) drawn into `dst`, cut to what the image
+/// holds: past it the slot shows somebody else's picture (only for the frame or two a larger
+/// image takes to come).
+fn sprite_within(draw: &mut dyn DrawContext, w: usize, h: usize, src: [f32; 4], dst: [f32; 4]) {
+    let (w, h) = (w as f32, h as f32);
+    if src[0] >= 0.0 && src[1] >= 0.0 && src[0] + src[2] <= w && src[1] + src[3] <= h {
+        draw.sprite(SPRITE, src, dst, None);
+        return;
+    }
+    let (kx, ky) = (dst[2] / src[2], dst[3] / src[3]);
+    let (x0, y0) = (src[0].max(0.0), src[1].max(0.0));
+    let (x1, y1) = ((src[0] + src[2]).min(w), (src[1] + src[3]).min(h));
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    let to = [dst[0] + (x0 - src[0]) * kx, dst[1] + (y0 - src[1]) * ky, (x1 - x0) * kx, (y1 - y0) * ky];
+    draw.sprite(SPRITE, [x0, y0, x1 - x0, y1 - y0], to, None);
+}
 
 /// The north-up picture a round or turning minimap is cut from.
 #[derive(Default)]
@@ -41,8 +85,106 @@ impl State {
     }
 
     /// GUI pixels of map the image must hold: the side, or its diagonal when the map turns.
+    /// While the minimap is enlarged, or on its way there or back, the enlarged side: one
+    /// image for the whole way, painted once.
     pub(crate) fn minimap_span(&self) -> f32 {
-        if self.config.rotate { self.config.size * 1.42 } else { self.config.size }
+        let side = if self.hud.held || self.hud.grow > 0.0 { self.big_side() } else { self.config.size };
+        if self.config.rotate { side * 1.42 } else { side }
+    }
+
+    pub(crate) fn minimap_corner(&self) -> Corner {
+        match self.config.corner {
+            1 => Corner::TopLeft,
+            2 => Corner::BottomRight,
+            3 => Corner::BottomLeft,
+            _ => Corner::TopRight,
+        }
+    }
+
+    /// The lines under the minimap, in GUI pixels.
+    fn minimap_text_h(&self) -> f32 {
+        (if self.config.coords { 11.0 } else { 0.0 }) + if self.config.other_coords { 10.0 } else { 0.0 }
+    }
+
+    /// The minimap's side fully enlarged: `GROW` times the setting, as far as the screen has
+    /// room (its height less the lines under it, and under half its width), even.
+    fn big_side(&self) -> f32 {
+        let base = self.config.size;
+        let room = (self.gui[1] - self.minimap_text_h() - 16.0).min(self.gui[0] * 0.45);
+        (((base * GROW).min(room) / 2.0).floor() * 2.0).max(base)
+    }
+
+    /// The minimap's side this frame, in whole GUI pixels (an even number, so its centre is
+    /// on a pixel's corner as at its own size).
+    pub(crate) fn mini_side(&self) -> f32 {
+        let base = self.config.size;
+        let g = self.hud.grow.clamp(0.0, 1.0);
+        if g <= 0.0 {
+            return base;
+        }
+        let eased = g * g * (3.0 - 2.0 * g);
+        let side = base + (self.big_side() - base) * eased;
+        ((side / 2.0).round() * 2.0).max(base)
+    }
+
+    /// How much the enlarged minimap covers `area` (GUI pixels): 0 when it doesn't reach it,
+    /// up to 1 as the minimap grows over it. Worked out from where it was drawn last and the
+    /// side it grows to, its corner staying where it is.
+    pub(crate) fn enlarged_over(&self, area: [f32; 4]) -> f32 {
+        let Some(r) = self.hud.mini_rect.filter(|_| self.hud.grow > 0.0 && !self.hud.hidden) else { return 0.0 };
+        let big = self.big_side() + 2.0;
+        let text_h = r[3] - (r[2]);
+        let corner = self.minimap_corner();
+        let right = matches!(corner, Corner::TopRight | Corner::BottomRight);
+        let top = matches!(corner, Corner::TopRight | Corner::TopLeft);
+        let x = if right { r[0] + r[2] - big } else { r[0] };
+        let y = if top { r[1] } else { r[1] + r[3] - big - text_h };
+        let meets = x < area[0] + area[2] && area[0] < x + big && y < area[1] + area[3] && area[1] < y + big + text_h;
+        if !meets {
+            return 0.0;
+        }
+        let g = self.hud.grow.clamp(0.0, 1.0);
+        g * g * (3.0 - 2.0 * g)
+    }
+
+    /// Grows the minimap while the enlarge key is held and shrinks it back after.
+    pub(crate) fn animate_minimap(&mut self, held: bool, dt: f32) {
+        self.hud.held = held && self.config.minimap;
+        let step = dt / GROW_TIME;
+        self.hud.grow =
+            if self.hud.held { (self.hud.grow + step).min(1.0) } else { (self.hud.grow - step).max(0.0) };
+    }
+
+    /// Moves the minimap's zoom a step (-1 closer, 1 wider) and keeps it as the setting, so
+    /// Options shows it and it stays.
+    pub(crate) fn step_zoom(&mut self, host: &dyn ClientHost, by: i32) {
+        let now = MINIMAP_ZOOMS.iter().position(|z| *z == self.config.scale).unwrap_or(2) as i32;
+        let next = (now + by).clamp(0, MINIMAP_ZOOMS.len() as i32 - 1) as usize;
+        self.hud.zoomed = Some((next, self.clock));
+        if next as i32 == now {
+            return;
+        }
+        host.set_setting(ID, "minimap_zoom", &next.to_string());
+        self.read_config(host);
+        self.config.scale = MINIMAP_ZOOMS[next];
+    }
+
+    /// "2x" on the minimap's lower edge for a moment after the zoom keys.
+    fn draw_zoom_hint(&self, draw: &mut dyn DrawContext, cx: f32, bottom: f32) {
+        let Some((step, at)) = self.hud.zoomed else { return };
+        let age = (self.clock - at) as f32;
+        let a = if age < 0.9 { 1.0 } else { 1.0 - (age - 0.9) / 0.35 };
+        if !(0.03..=1.0).contains(&a) {
+            return;
+        }
+        let text = ZOOM_LABELS[step];
+        let tw = draw.text_width(text).ceil();
+        let x = (cx - tw / 2.0).round();
+        let alpha = |most: f32| ((most * a).round() as u32) << 24;
+        draw.fill([x - 3.0, bottom - 13.0, tw + 6.0, 11.0], alpha(160.0));
+        if a * 255.0 >= 8.0 {
+            draw.text(text, [x, bottom - 11.0], alpha(255.0) | 0xFF_FFFF, false);
+        }
     }
 
     /// Whether the picture has to be made here: only a turning map does. A round one that
@@ -113,7 +255,7 @@ impl State {
     /// Writes this frame's view of the north-up picture into the slot, when it moved.
     fn refresh_soft(&mut self, host: &mut dyn ClientHost, player: Player, look: Look) {
         let Some((frame, revision, _, painted_at)) = self.soft.painted else { return };
-        let side = self.config.size;
+        let side = self.mini_side();
         // Three texels to two GUI pixels: an upload costs by the texel, and this one is made
         // every frame the view turns.
         let n = ((side * 1.5) as usize).clamp(32, 384);
@@ -142,7 +284,7 @@ impl State {
             let (mut sx, mut sz) = (cx + ((0.5 - half) * cos - v * sin) * k, cz + ((0.5 - half) * sin + v * cos) * k);
             let (dx, dz) = (cos * k, sin * k);
             let row = &mut out[j * n * 4..(j + 1) * n * 4];
-            for (i, pixel) in row.chunks_exact_mut(4).enumerate() {
+            for (i, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 let (px, pz) = (sx, sz);
                 sx += dx;
                 sz += dz;
@@ -180,16 +322,11 @@ impl State {
     pub(crate) fn draw_minimap(&mut self, host: &dyn ClientHost, event: &mut RenderGuiPostEvent<'_>) {
         let Some(player) = self.player else { return };
         let cfg = self.config;
-        let side = cfg.size;
+        let side = self.mini_side();
         let other = if cfg.other_coords { self.other_side(player.pos[0], player.pos[2]) } else { None };
         let text_h = if cfg.coords { 11.0 } else { 0.0 } + if other.is_some() { 10.0 } else { 0.0 };
-        let corner = match cfg.corner {
-            1 => Corner::TopLeft,
-            2 => Corner::BottomRight,
-            3 => Corner::BottomLeft,
-            _ => Corner::TopRight,
-        };
-        let (bx, by) = event.corners.place(corner, side + 2.0, side + 2.0 + text_h);
+        let (bx, by) = event.corners.place(self.minimap_corner(), side + 2.0, side + 2.0 + text_h);
+        self.hud.mini_rect = Some([bx, by, side + 2.0, side + 2.0 + text_h]);
         let draw = &mut *event.draw;
         let (x, y) = (bx + 1.0, by + 1.0);
         let center = [x + side / 2.0, y + side / 2.0];
@@ -224,12 +361,12 @@ impl State {
                         draw.fill([left - 1.0, top, half * 2.0 + 2.0, 1.0], FRAME_COLOR);
                         draw.fill([left, top, half * 2.0, 1.0], UNSEEN_COLOR);
                         let src = [sx + (r - half) * per, sz + row as f32 * per, half * 2.0 * per, per];
-                        draw.sprite(SPRITE, src, [left, top, half * 2.0, 1.0], None);
+                        sprite_within(draw, f.w, f.h, src, [left, top, half * 2.0, 1.0]);
                     }
                     draw.fill([center[0] - 4.0, y - 1.0, 8.0, 1.0], FRAME_COLOR);
                     draw.fill([center[0] - 4.0, y + side, 8.0, 1.0], FRAME_COLOR);
                 } else {
-                    draw.sprite(SPRITE, [sx, sz, across, across], [x, y, side, side], None);
+                    sprite_within(draw, f.w, f.h, [sx, sz, across, across], [x, y, side, side]);
                 }
             }
             None => {}
@@ -271,15 +408,19 @@ impl State {
         let around = [player.pos[0] - span, player.pos[2] - span, player.pos[0] + span, player.pos[2] + span];
         self.draw_explore_mini(draw, around, place);
         self.draw_blips(draw, f64::from(self.partial), None, 1.0, place);
-        // Waypoints: on the map, or on its edge towards them.
-        for (_, w) in self.here() {
+        // Waypoints: on the map, or on its edge towards them, wholly inside it (an item or a
+        // face is wider than a diamond).
+        // The tracked one and the nearest, as many as fit a frame: each is several draw calls.
+        let until = host.millis() + crate::DRAW_WORK_MS;
+        for (n, (_, w)) in self.here_nearest([player.pos[0], player.pos[2]]).into_iter().enumerate() {
+            if n >= crate::MINIMAP_WAYPOINTS || (n % 16 == 15 && host.millis() >= until) {
+                break;
+            }
             let o = offset(f64::from(w.pos[0]) + 0.5, f64::from(w.pos[2]) + 0.5);
-            let k = if cfg.round {
-                (reach / (o[0] * o[0] + o[1] * o[1]).sqrt().max(0.001)).min(1.0)
-            } else {
-                (reach / o[0].abs().max(o[1].abs()).max(0.001)).min(1.0)
-            };
-            marker(draw, [center[0] + o[0] * k, center[1] + o[1] * k], w.color, if k < 1.0 { 1.5 } else { 2.0 });
+            let far = if cfg.round { (o[0] * o[0] + o[1] * o[1]).sqrt() } else { o[0].abs().max(o[1].abs()) };
+            let edge = (side / 2.0 - 1.0 - crate::icons::reach(w, 1.5)).min(reach);
+            let k = (edge / far.max(0.001)).min(1.0);
+            gfx::waypoint_icon(draw, w, [center[0] + o[0] * k, center[1] + o[1] * k], if k < 1.0 { 1.5 } else { 2.0 }, false);
         }
         if clipped {
             let _ = draw.pop_clip();
@@ -289,6 +430,7 @@ impl State {
         // North, on the rim.
         let north = [center[0] - sin * (side / 2.0 - 5.0), center[1] - cos * (side / 2.0 - 5.0)];
         draw.text("N", [north[0] - 2.5, north[1] - 4.0], 0xFFFF_FFFF, true);
+        self.draw_zoom_hint(draw, center[0], y + side);
         let mut line_y = y + side + 3.0;
         if cfg.coords {
             let p = player.pos;
@@ -299,14 +441,17 @@ impl State {
         if let Some((name, ox, oz)) = other {
             centered(draw, &format!("{name} {ox} {oz}"), center[0], line_y, 0xFFB0_B0C8);
         }
-        let _ = host;
     }
 
     /// Where world point `at` is on this frame's screen, in GUI pixels: through the camera's own
     /// matrices, the ones the world is drawn with, view bobbing and all. (The game's `project`
     /// leaves the bobbing out, so what it places drifts against the world while walking.)
     pub(crate) fn on_screen(&self, host: &dyn ClientHost, at: [f64; 3]) -> Option<([f32; 2], f64)> {
-        let cam = host.camera()?;
+        self.on_screen_by(&host.camera()?, at)
+    }
+
+    /// [`on_screen`](Self::on_screen) through a camera read once for many points.
+    pub(crate) fn on_screen_by(&self, cam: &mod_api::Camera, at: [f64; 3]) -> Option<([f32; 2], f64)> {
         let rel = [0, 1, 2].map(|i| (at[i] - cam.position[i]) as f32);
         // Column-major, the point taken from the camera first.
         let apply = |m: &[f32; 16], v: [f32; 4]| -> [f32; 4] {
@@ -326,22 +471,29 @@ impl State {
 
     /// Name and distance over each waypoint, where it is on the screen: the game's own font at
     /// a fixed small size (one or two screen pixels a font pixel, never the full GUI scale), on
-    /// a faint plate as a name tag has. Each label is placed from this frame's camera alone:
+    /// a faint plate as a name tag has, the waypoint's icon left of the name. Each label is
+    /// placed from this frame's camera alone:
     /// nothing is carried over from the last frame and labels don't push each other about.
     pub(crate) fn draw_labels(&self, host: &dyn ClientHost, draw: &mut dyn DrawContext) {
         use mod_api::client::hud_layout::PoseOp;
         use mod_api::{GuiDraw, Text};
         let [w, _] = draw.size();
         let scale = host.gui_scale().unwrap_or(2).max(1) as f32;
-        // Screen pixels a font pixel: two on a tall window, one on a small one, and always
-        // under the GUI's own scale.
-        let window = self.gui[1] * scale;
-        let font = (if window >= 900.0 { 2.0f32 } else { 1.0 }).min((scale - 1.0).max(1.0));
+        let font = crate::label_font(self.gui[1], scale);
         let k = font / scale;
         let mut list = Vec::new();
-        for (_, wp) in self.here() {
+        let mut later = Vec::new();
+        let Some(cam) = host.camera() else { return };
+        // The tracked one and the nearest first; past a screenful of labels the rest would only
+        // pile up, and each one costs the frame time.
+        let from = [cam.position[0], cam.position[2]];
+        let until = host.millis() + crate::DRAW_WORK_MS;
+        for (n, (_, wp)) in self.here_nearest(from).into_iter().enumerate() {
+            if later.len() >= crate::LABELS_MAX || (n % 16 == 15 && host.millis() >= until) {
+                break;
+            }
             let at = [f64::from(wp.pos[0]) + 0.5, f64::from(wp.pos[1]) + 1.6, f64::from(wp.pos[2]) + 0.5];
-            let Some(([sx, sy], far)) = self.on_screen(host, at) else { continue };
+            let Some(([sx, sy], far)) = self.on_screen_by(&cam, at) else { continue };
             if self.config.hover_names && (sx - w / 2.0).abs() > AIM {
                 continue;
             }
@@ -350,15 +502,29 @@ impl State {
             // On whole screen pixels, so the glyphs stay sharp; a screen pixel is the finest
             // step there is.
             let snap = |v: f32| (v * scale).round() / scale;
-            list.push(GuiDraw::Push(vec![PoseOp::Translate(snap(sx), snap(sy - 13.0 * k)), PoseOp::Scale(k, k)]));
-            let half = tw / 2 + 2;
-            list.push(GuiDraw::Fill { x0: -half, y0: -2, x1: half + (tw & 1), y1: 9, color: 0x5000_0000 });
-            list.push(GuiDraw::Fill { x0: -half, y0: 9, x1: half + (tw & 1), y1: 10, color: argb(wp.color) });
-            list.push(GuiDraw::Text { text: Text::literal(text), x: -(tw / 2), y: 0, color: 0xFFFF_FFFF, shadow: false });
+            let origin = [snap(sx), snap(sy - 13.0 * k)];
+            list.push(GuiDraw::Push(vec![PoseOp::Translate(origin[0], origin[1]), PoseOp::Scale(k, k)]));
+            // The waypoint's icon, then a gap, then the name: "◆ Base 125m", centred.
+            let icon = crate::icons::LabelIcon::of(wp, font);
+            let width = icon.width + 2 + tw;
+            let left = -(width / 2);
+            list.push(GuiDraw::Fill { x0: left - 2, y0: -2, x1: left + width + 2, y1: 9, color: 0x5000_0000 });
+            icon.paint(&mut list, left, 3, wp.tracked);
+            list.push(GuiDraw::Text {
+                text: Text::literal(text),
+                x: left + icon.width + 2,
+                y: 0,
+                color: 0xFFFF_FFFF,
+                shadow: false,
+            });
             list.push(GuiDraw::Pop);
+            later.push((icon, origin, left, wp.tracked));
         }
         if !list.is_empty() {
             let _ = draw.gui_paint(&list);
+        }
+        for (icon, origin, left, tracked) in &later {
+            icon.draw_after(draw, *origin, k, *left, 3, *tracked);
         }
     }
 
@@ -381,7 +547,7 @@ impl State {
         if dist >= 2.0 {
             gfx::arrow(draw, [cx, 14.0], angle, 7.0, argb(wp.color));
         } else {
-            marker(draw, [cx, 14.0], wp.color, 3.0);
+            gfx::waypoint_icon(draw, wp, [cx, 14.0], 3.0, false);
         }
         centered(draw, &text, cx, 24.0, 0xFFFF_FFFF);
     }

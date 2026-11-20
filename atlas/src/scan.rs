@@ -30,8 +30,23 @@ const CAVE_ROCK: i32 = 40;
 const CAVE_DROP: i32 = 32;
 /// `MapColor.FIRE`: lava.
 const LAVA: u8 = 4;
-/// A tick stops starting chunks once it made this many host calls (about 0.2 microseconds each).
+/// A tick stops starting chunks once it made this many host calls, or once its time is up
+/// (`Scanner::until`): a call costs about 3 microseconds in the game (5300 took 18 ms), more on
+/// a busy machine.
 const CALL_BUDGET: u32 = 3500;
+
+/// How far past its `until` a run lets a chunk it started go on, in ms.
+const LATE_MS: u64 = 15;
+
+/// How reading one chunk went.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Read {
+    Done,
+    /// The client doesn't hold it.
+    Absent,
+    /// Out of time: nothing of it was stored.
+    Late,
+}
 
 /// What a scanner reads.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -82,6 +97,9 @@ pub struct Scanner {
     cursor: usize,
     /// A `run` stops starting chunks once it made this many host calls.
     pub budget: u32,
+    /// ...or once the host clock (ms) reaches this, set by the caller for each run; a chunk
+    /// that runs `LATE_MS` past it is dropped half read (and read again later).
+    pub until: u64,
     pub tick: u64,
     /// Host calls made by the last `run`, and by all of them.
     pub calls: u32,
@@ -102,6 +120,7 @@ impl Scanner {
             cell_tints: HashMap::new(),
             cursor: 0,
             budget: CALL_BUDGET,
+            until: u64::MAX,
             tick: 0,
             calls: 0,
             calls_total: 0,
@@ -245,7 +264,7 @@ impl Scanner {
     }
 
     /// Reads chunk `chunk`: every column, or with `light` only those whose surface moved since
-    /// the last read. None when the client doesn't hold the chunk.
+    /// the last read.
     fn chunk(
         &mut self,
         host: &dyn ClientHost,
@@ -254,14 +273,18 @@ impl Scanner {
         legend: &mut Legend,
         chunk: (i32, i32),
         light: bool,
-    ) -> Option<()> {
+    ) -> Read {
         let (bx, bz) = (chunk.0 * 16, chunk.1 * 16);
         let columns: Vec<(i32, i32)> = (0..256).map(|i| (bx + i % 16, bz + i / 16)).collect();
         self.calls += 1;
-        let heights = host.client_surface_heights(&columns, Heightmap::WorldSurface).ok()?;
+        let Ok(heights) = host.client_surface_heights(&columns, Heightmap::WorldSurface) else { return Read::Absent };
+        if heights.len() < 256 {
+            return Read::Absent;
+        }
         let mut surface = [0i16; 256];
         for (s, h) in surface.iter_mut().zip(&heights) {
-            *s = (*h)? as i16;
+            let Some(h) = *h else { return Read::Absent };
+            *s = h as i16;
         }
         let mut color = [0u8; 256];
         let mut height = [0i16; 256];
@@ -269,10 +292,14 @@ impl Scanner {
         let mut tint = [0u8; 256];
         let old = if light { self.seen.get(&chunk).map(|s| s.surface) } else { None };
         if old == Some(surface) {
-            return Some(());
+            return Read::Done;
         }
         self.cell_tints.clear();
+        let late = self.until.saturating_add(LATE_MS);
         for i in 0..256 {
+            if i % 32 == 31 && host.millis() >= late {
+                return Read::Late;
+            }
             let (x, z) = columns[i];
             let column = match self.layer {
                 Layer::Surface => {
@@ -316,7 +343,8 @@ impl Scanner {
         };
         self.seen.insert(chunk, Seen { surface, full_at });
         self.chunks_read += 1;
-        Some(())
+        crate::TIMING_COUNT[if light { 3 } else { 4 }].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Read::Done
     }
 
     /// One tick's work around the player's chunk `center`: up to `fresh` chunks never read, and
@@ -335,6 +363,10 @@ impl Scanner {
         self.tick += 1;
         self.calls = 0;
         let tick = self.tick;
+        if host.millis() >= self.until {
+            // The tick's time went elsewhere: this run's chunks wait for the next one.
+            return;
+        }
         let cave = matches!(self.layer, Layer::Cave(_));
         let radius = if cave { CAVE_RADIUS } else { RADIUS };
         self.budget = if cave { CALL_BUDGET * 2 } else { CALL_BUDGET };
@@ -365,13 +397,17 @@ impl Scanner {
                 let held = host
                     .client_surface_heights(&[(key.0 * 16, key.1 * 16)], Heightmap::WorldSurface)
                     .is_ok_and(|h| h.first().copied().flatten().is_some());
-                if held && self.chunk(host, level, store, legend, key, false).is_some() {
-                    self.absent.remove(&key);
-                    done += 1;
-                } else {
-                    self.absent.insert(key, tick);
+                match if held { self.chunk(host, level, store, legend, key, false) } else { Read::Absent } {
+                    Read::Done => {
+                        self.absent.remove(&key);
+                        done += 1;
+                    }
+                    Read::Absent => {
+                        self.absent.insert(key, tick);
+                    }
+                    Read::Late => break 'rings,
                 }
-                if done >= fresh || probes >= 64 || self.calls >= self.budget {
+                if done >= fresh || probes >= 64 || self.calls >= self.budget || host.millis() >= self.until {
                     break 'rings;
                 }
             }
@@ -395,13 +431,20 @@ impl Scanner {
             }
         }
         for (dx, dz) in turn {
+            if host.millis() >= self.until {
+                break;
+            }
             let key = (center.0 + dx, center.1 + dz);
             let Some(seen) = self.seen.get(&key) else { continue };
             let close = dx.abs() <= 1 && dz.abs() <= 1;
             let light = !cave && !(close && tick - seen.full_at >= FULL_AGAIN);
-            if self.chunk(host, level, store, legend, key, light).is_none() {
+            match self.chunk(host, level, store, legend, key, light) {
+                Read::Done => {}
                 // Unloaded since: read it afresh when it comes back.
-                self.seen.remove(&key);
+                Read::Absent => {
+                    self.seen.remove(&key);
+                }
+                Read::Late => break,
             }
         }
         self.calls_total += u64::from(self.calls);
