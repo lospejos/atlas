@@ -1,6 +1,6 @@
 id = "atlas"
 name = "Atlas"
-version = "0.3.2"
+version = "0.3.3"
 description = "Atlas: minimap, world map with cave and Nether layers, entity radar, waypoints with editing, sharing and portal links, PNG export."
 authors = ["publicusr"]
 # A wasm mod: Rust in src/, built to mod.wasm by `cargo horizon-mod build --wasm` against the SDK build Cargo.toml pins, beside data/ and assets/.
@@ -10,5 +10,5 @@ side = "client"
 capabilities = ["registries"]
 
 [wasm]
-sha512 = "7c140899e05313a995cabe80257987a621f24412e99ab0fed6074efc74cb547ad1e5e10815a9d45fa4119ec23c3f473d642ba7e0a4696f53e1e2aac400fb0a74"
+sha512 = "ca70240078140cb87a9fb3621fb355205798c9262e83daf17e81e06c450a5acae4fb6866140dc77a6dcc47c504cbd594b88585de77352cc81e4120d38a2d9ca3"
 toolchain = "1.99.1 58cf8f9c35b355199727627d07ae34a4e2846d67"

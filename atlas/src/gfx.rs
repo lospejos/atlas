@@ -100,97 +100,11 @@ pub fn player_marker(draw: &mut dyn DrawContext, at: [f32; 2], angle: f32, px: f
 pub fn hover_label(draw: &mut dyn DrawContext, mouse: [f32; 2], text: &str, gui: [f32; 2]) {
     let tw = draw.text_width(text);
     let x = (mouse[0] + 8.0).min(gui[0] - tw - 8.0).max(2.0);
-    let y = (mouse[1] - 14.0).max(2.0);
+    // Above the cursor, or under it near the top of the screen, where the bar is.
+    let y = if mouse[1] < 34.0 { mouse[1] + 14.0 } else { mouse[1] - 14.0 };
     draw.fill([x - 3.0, y - 2.0, tw + 6.0, 12.0], 0xF010_0010);
     draw.fill([x - 3.0, y + 10.0, tw + 6.0, 1.0], BUBBLE_EDGE_TOP);
     draw.text(text, [x, y], 0xFFFF_FFFF, false);
-}
-
-/// A 3 x 5 pixel font for the waypoint labels in the world, which must stay small whatever the
-/// GUI scale (the game's own text cannot be drawn smaller than one GUI pixel a texel). A glyph
-/// is five rows of three bits, left bit first. Lower case reads as upper.
-fn glyph(c: char) -> [u8; 5] {
-    match c.to_ascii_uppercase() {
-        'A' => [2, 5, 7, 5, 5],
-        'B' => [6, 5, 6, 5, 6],
-        'C' => [3, 4, 4, 4, 3],
-        'D' => [6, 5, 5, 5, 6],
-        'E' => [7, 4, 6, 4, 7],
-        'F' => [7, 4, 6, 4, 4],
-        'G' => [3, 4, 5, 5, 3],
-        'H' => [5, 5, 7, 5, 5],
-        'I' => [7, 2, 2, 2, 7],
-        'J' => [1, 1, 1, 5, 2],
-        'K' => [5, 5, 6, 5, 5],
-        'L' => [4, 4, 4, 4, 7],
-        'M' => [5, 7, 7, 5, 5],
-        'N' => [6, 5, 5, 5, 5],
-        'O' => [2, 5, 5, 5, 2],
-        'P' => [6, 5, 6, 4, 4],
-        'Q' => [2, 5, 5, 6, 3],
-        'R' => [6, 5, 6, 5, 5],
-        'S' => [3, 4, 2, 1, 6],
-        'T' => [7, 2, 2, 2, 2],
-        'U' => [5, 5, 5, 5, 7],
-        'V' => [5, 5, 5, 5, 2],
-        'W' => [5, 5, 7, 7, 5],
-        'X' => [5, 5, 2, 5, 5],
-        'Y' => [5, 5, 2, 2, 2],
-        'Z' => [7, 1, 2, 4, 7],
-        '0' => [7, 5, 5, 5, 7],
-        '1' => [2, 6, 2, 2, 7],
-        '2' => [6, 1, 2, 4, 7],
-        '3' => [6, 1, 2, 1, 6],
-        '4' => [5, 5, 7, 1, 1],
-        '5' => [7, 4, 6, 1, 6],
-        '6' => [3, 4, 7, 5, 7],
-        '7' => [7, 1, 2, 2, 2],
-        '8' => [7, 5, 7, 5, 7],
-        '9' => [7, 5, 7, 1, 6],
-        ' ' => [0; 5],
-        '.' => [0, 0, 0, 0, 2],
-        ',' => [0, 0, 0, 2, 4],
-        '-' => [0, 0, 7, 0, 0],
-        '_' => [0, 0, 0, 0, 7],
-        '\'' => [2, 2, 0, 0, 0],
-        '!' => [2, 2, 2, 0, 2],
-        ':' => [0, 2, 0, 2, 0],
-        '/' => [1, 1, 2, 4, 4],
-        '(' => [1, 2, 2, 2, 1],
-        ')' => [4, 2, 2, 2, 4],
-        '+' => [0, 2, 7, 2, 0],
-        '#' => [5, 7, 5, 7, 5],
-        _ => [6, 1, 2, 0, 2],
-    }
-}
-
-/// The width of `text` in the small font, `px` GUI pixels a font pixel.
-pub fn tiny_width(text: &str, px: f32) -> f32 {
-    (text.chars().count() as f32 * 4.0 - 1.0).max(0.0) * px
-}
-
-/// `text` in the small font with its top left at `at`.
-pub fn tiny_text(draw: &mut dyn DrawContext, text: &str, at: [f32; 2], px: f32, color: u32) {
-    for (i, c) in text.chars().enumerate() {
-        let x = at[0] + i as f32 * 4.0 * px;
-        for (row, bits) in glyph(c).into_iter().enumerate() {
-            let y = at[1] + row as f32 * px;
-            // Runs of set bits, one rectangle each.
-            match bits {
-                0 => {}
-                7 => draw.fill([x, y, 3.0 * px, px], color),
-                6 => draw.fill([x, y, 2.0 * px, px], color),
-                3 => draw.fill([x + px, y, 2.0 * px, px], color),
-                5 => {
-                    draw.fill([x, y, px, px], color);
-                    draw.fill([x + 2.0 * px, y, px, px], color);
-                }
-                4 => draw.fill([x, y, px, px], color),
-                2 => draw.fill([x + px, y, px, px], color),
-                _ => draw.fill([x + 2.0 * px, y, px, px], color),
-            }
-        }
-    }
 }
 
 pub fn centered(draw: &mut dyn DrawContext, text: &str, cx: f32, y: f32, color: u32) {

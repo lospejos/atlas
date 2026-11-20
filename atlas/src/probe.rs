@@ -23,6 +23,12 @@ pub struct Probe {
     /// The worst distance between the cursor the frame hook read and the one the draw got.
     cursor_gap: f32,
     cells_max: u32,
+    /// A walking mob followed on the minimap: its name, and where each frame drew it, in
+    /// screen pixels from the player's marker.
+    walker: Option<(String, Vec<[f32; 2]>)>,
+    walker_done: u32,
+    project_frames: u64,
+    project_gap: [f32; 2],
     trace: String,
     /// A layer switch under way: frames drawn since the layer changed, when it began, and the
     /// longest of those frames in milliseconds.
@@ -200,6 +206,35 @@ impl State {
         self.probe_write(host, line);
     }
 
+    /// Test builds: how the game's `project` and the camera's own matrices place a waypoint, a
+    /// line every 20 frames: the matrices in both layouts, with the point taken from the camera.
+    pub(crate) fn probe_project(&mut self, host: &dyn ClientHost) {
+        self.probe.project_frames += 1;
+        let Some(wp) = self.waypoints.iter().find(|w| w.dim == self.dim && w.kind == crate::waypoints::Kind::User) else { return };
+        let at = [f64::from(wp.pos[0]) + 0.5, f64::from(wp.pos[1]) + 1.6, f64::from(wp.pos[2]) + 0.5];
+        let (Some(cam), Some(game)) = (host.camera(), host.project(at)) else { return };
+        let rel = [(at[0] - cam.position[0]) as f32, (at[1] - cam.position[1]) as f32, (at[2] - cam.position[2]) as f32, 1.0];
+        let mul = |m: &[f32; 16], v: [f32; 4], columns: bool| -> [f32; 4] {
+            std::array::from_fn(|r| (0..4).map(|c| if columns { m[c * 4 + r] } else { m[r * 4 + c] } * v[c]).sum())
+        };
+        let mut out = String::new();
+        for columns in [true, false] {
+            let clip = mul(&cam.projection, mul(&cam.view, rel, columns), columns);
+            let ndc = [clip[0] / clip[3], clip[1] / clip[3]];
+            let gap = ((ndc[0] - game[0]).powi(2) + (ndc[1] - game[1]).powi(2)).sqrt() * self.gui[0] / 2.0;
+            self.probe.project_gap[usize::from(!columns)] = self.probe.project_gap[usize::from(!columns)].max(gap);
+            out.push_str(&format!(" {}: ndc {:.4} {:.4} gap {:.2}px", if columns { "columns" } else { "rows" }, ndc[0], ndc[1], gap));
+        }
+        if self.probe.project_frames.is_multiple_of(40) {
+            let line = format!(
+                "project: game {:.4} {:.4};{out}; worst gaps so far {:.2} / {:.2} px",
+                game[0], game[1], self.probe.project_gap[0], self.probe.project_gap[1]
+            );
+            self.probe.project_gap = [0.0; 2];
+            self.probe_write(host, line);
+        }
+    }
+
     pub(crate) fn probe_draw(&mut self, mouse: [f32; 2]) {
         let gap = (mouse[0] - self.cursor[0]).abs().max((mouse[1] - self.cursor[1]).abs());
         self.probe.cursor_gap = self.probe.cursor_gap.max(gap);
@@ -247,6 +282,39 @@ impl State {
                 self.shown().waiting()
             );
             self.probe_write(host, line);
+        }
+        // A mob that walks: sixty frames of where the minimap draws it, then the steps between.
+        if self.probe.walker_done < 3 && matches!(self.ui, Ui::Closed) {
+            let partial = f64::from(self.partial);
+            let name = self.probe.walker.as_ref().map(|w| w.0.clone());
+            let moving = self.radar.blips.iter().find(|b| match &name {
+                Some(n) => b.name == *n && (b.to[0] - b.from[0]).abs() + (b.to[2] - b.from[2]).abs() > 0.02,
+                None => (b.to[0] - b.from[0]).abs() + (b.to[2] - b.from[2]).abs() > 0.05,
+            });
+            match (moving, &mut self.probe.walker) {
+                (Some(b), walker) => {
+                    let x = b.from[0] + (b.to[0] - b.from[0]) * partial;
+                    let z = b.from[2] + (b.to[2] - b.from[2]) * partial;
+                    let k = self.scale / self.config.scale;
+                    let at = [((x - p.pos[0]) as f32 * k).round(), ((z - p.pos[2]) as f32 * k).round()];
+                    let w = walker.get_or_insert_with(|| (b.name.clone(), Vec::new()));
+                    w.1.push(at);
+                    if w.1.len() >= 60 {
+                        let (name, seen) = self.probe.walker.take().unwrap_or_default();
+                        let steps: Vec<f32> =
+                            seen.windows(2).map(|s| (s[1][0] - s[0][0]).abs().max((s[1][1] - s[0][1]).abs())).collect();
+                        let worst = steps.iter().copied().fold(0.0f32, f32::max);
+                        let moved = steps.iter().filter(|s| **s > 0.0).count();
+                        let line = format!(
+                            "radar walker {name}: 60 frames from {:?} to {:?} screen px, largest step {worst} px, frames with a step {moved}",
+                            seen[0], seen[59]
+                        );
+                        self.probe.walker_done += 1;
+                        self.probe_write(host, line);
+                    }
+                }
+                (None, walker) => *walker = None,
+            }
         }
         let events = std::mem::take(&mut self.probe.events_this_frame);
         let delta = std::mem::take(&mut self.probe.delta_this_frame);

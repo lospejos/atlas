@@ -298,8 +298,9 @@ pub(crate) struct State {
     pixels: Vec<u8>,
     /// When the view last moved by a drag, a glide or a slide, on the frame clock.
     panned: f64,
-    /// The GUI's size as the last draw saw it.
+    /// The GUI's size as the last draw saw it, and screen pixels a GUI pixel.
     gui: [f32; 2],
+    scale: f32,
     ui: Ui,
     view: Option<View>,
     close: bool,
@@ -330,6 +331,8 @@ pub(crate) struct State {
     /// The frame's partial tick, for what moves between ticks.
     partial: f32,
     radar: radar::Radar,
+    /// The item whose icon stands for dropped items in the world map's bar.
+    bar_item: Option<mod_api::ItemKey>,
     explore: explore::Explore,
     soft: minimap::Soft,
     export: Option<export::Export>,
@@ -372,6 +375,7 @@ impl Default for State {
             pixels: Vec::new(),
             panned: -1.0,
             gui: [0.0; 2],
+            scale: 2.0,
             ui: Ui::Closed,
             view: None,
             close: false,
@@ -393,6 +397,7 @@ impl Default for State {
             zoom_anim: None,
             partial: 0.0,
             radar: radar::Radar::default(),
+            bar_item: None,
             explore: explore::Explore::default(),
             soft: minimap::Soft::default(),
             export: None,
@@ -1077,6 +1082,7 @@ impl Hooks for Atlas {
             return;
         }
         st.now = host.millis();
+        st.scale = host.gui_scale().unwrap_or(2).max(1) as f32;
         let dt = event.elapsed.as_secs_f64().min(0.25);
         st.clock += dt;
         st.partial = event.world_partial_tick.clamp(0.0, 1.0);
@@ -1119,6 +1125,9 @@ impl Hooks for Atlas {
         st.gui = event.draw.size();
         if st.world.is_none() || !host.on(ID) || matches!(st.ui, Ui::Map) {
             return;
+        }
+        if TEST {
+            st.probe_project(host);
         }
         if st.config.labels {
             st.draw_labels(host, event.draw);
@@ -1205,10 +1214,7 @@ impl Hooks for Atlas {
                     st.draw_map(host, event.draw, mouse, false);
                 }
                 // The block the bubble is about, where the view has it now.
-                st.edit_spot = edit.anchor.and_then(|at| host.project(at)).and_then(|[nx, ny, _]| {
-                    let on = nx.abs() <= 1.0 && ny.abs() <= 1.0;
-                    on.then_some([(nx + 1.0) / 2.0 * st.gui[0], (1.0 - ny) / 2.0 * st.gui[1]])
-                });
+                st.edit_spot = edit.anchor.and_then(|at| st.on_screen(host, at)).map(|(spot, _)| spot);
                 st.draw_edit(event.draw, &edit, mouse);
                 st.ui = Ui::Edit(edit);
             }

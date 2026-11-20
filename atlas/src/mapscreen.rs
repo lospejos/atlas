@@ -6,7 +6,6 @@ use crate::bubble::Edit;
 use crate::gfx::{self, PANEL_BG, argb, centered, fit, inside, marker};
 use crate::mapview::{View, ZOOM_MAX, ZOOM_STEP, ZoomAnim};
 use crate::overlays::{OverlayMarker, OverlayQuery};
-use crate::radar::Class;
 use crate::store::UNSEEN;
 use crate::waypoints::{self, NETHER, OVERWORLD, Waypoint, distance_text};
 use crate::{ID, KEY_MAP, Mode, SPRITE, State, UNSEEN_COLOR, Ui};
@@ -97,6 +96,12 @@ impl State {
         let mouse = if live { mouse } else { [-1000.0; 2] };
         let mut hits = std::mem::take(&mut self.hits);
         hits.clear();
+        if self.bar_item.is_none() {
+            self.bar_item = mod_api::Identifier::parse("minecraft:diamond").ok().and_then(|id| host.item_key(&id));
+        }
+        if self.radar.sprites.is_empty() {
+            self.radar.sprites = (0..crate::faces::FACES.len()).map(crate::faces::sprites).collect();
+        }
         let mut tip: Option<String> = None;
         // The name of the radar icon or structure under the cursor, shown beside it.
         let mut label: Option<String> = None;
@@ -171,7 +176,7 @@ impl State {
             gfx::player_marker(draw, self.screen_at(view, player.pos[0], player.pos[2]), player.yaw + 180.0, 1.25);
         }
 
-        let below = self.draw_bar(draw, mouse, &mut hits, &mut tip);
+        let below = self.draw_bar(draw, mouse, &mut hits, &mut tip, &mut label);
         self.draw_explore_panel(draw, below, mouse, &mut hits, &mut tip);
         self.draw_list(draw, mouse, &mut hits, &mut tip);
         if inside(self.panel().0, mouse) || hits.iter().any(|(hit, r)| !matches!(hit, Hit::Marker(_)) && inside(*r, mouse))
@@ -236,7 +241,8 @@ impl State {
             draw.fill([(w - tw) / 2.0 - 5.0, 34.0, tw + 10.0, 13.0], 0xE010_1014);
             centered(draw, &text, w / 2.0, 37.0, 0xFFFF_E080);
         }
-        if let Some(text) = label.filter(|_| live && !hits.iter().any(|(hit, r)| !matches!(hit, Hit::Marker(_)) && inside(*r, mouse))) {
+        let covered = hits.iter().any(|(hit, r)| !matches!(hit, Hit::Marker(_) | Hit::Toggle(_)) && inside(*r, mouse));
+        if let Some(text) = label.filter(|_| live && !covered) {
             gfx::hover_label(draw, mouse, &text, self.gui);
         }
         self.hits = hits;
@@ -296,6 +302,7 @@ impl State {
         mouse: [f32; 2],
         hits: &mut Vec<(Hit, [f32; 4])>,
         tip: &mut Option<String>,
+        label: &mut Option<String>,
     ) -> f32 {
         let cfg = self.config;
         let edge = self.gui[0] - PANEL_W - 12.0;
@@ -333,26 +340,44 @@ impl State {
             }
         }
         x += 5.0;
-        // The radar: a dot in its colour each.
-        let dots = [
-            ("radar_hostile", Class::Hostile, cfg.hostile, "Hostile mobs on the maps"),
-            ("radar_passive", Class::Passive, cfg.passive, "Animals and other mobs on the maps"),
-            ("radar_players", Class::Player, cfg.players, "Other players on the maps"),
-            ("radar_items", Class::Item, cfg.items, "Dropped items on the maps"),
+        // The radar: a face each (a zombie for the hostile mobs, a cow for the others, the
+        // player's for players) and an item for the dropped items, dimmed while off.
+        let toggles = [
+            ("radar_hostile", "zombie", cfg.hostile, "Hostile mobs"),
+            ("radar_passive", "cow", cfg.passive, "Passive mobs"),
+            ("radar_players", "player", cfg.players, "Players"),
+            ("radar_items", "", cfg.items, "Items"),
         ];
-        for (key, class, on, words) in dots {
-            let at = place(13.0, &mut x, &mut y);
-            let rect = [at[0], at[1], 13.0, 12.0];
+        for (key, face, on, words) in toggles {
+            let at = place(14.0, &mut x, &mut y);
+            let rect = [at[0], at[1], 14.0, 12.0];
             let hot = inside(rect, mouse);
             draw.fill(rect, if on { 0xE034_3A4C } else if hot { 0xD02A_2C36 } else { PANEL_BG });
-            let rgb = if on { class.rgb() } else { 0x606060 };
-            gfx::dot(draw, [at[0] + 6.5, at[1] + 6.0], rgb, if class == Class::Item { 1.5 } else { 2.5 });
+            let middle = [at[0] + 7.0, at[1] + 5.5];
+            let tint = if on { 0xFFFF_FFFF } else { 0xFF50_5050 };
+            match crate::faces::index(face) {
+                Some(index) => {
+                    if self.draw_face(draw, index, middle, 8.0, tint).is_none() {
+                        draw.text(&words[..1], [at[0] + 4.0, at[1] + 2.0], tint, false);
+                    }
+                }
+                None => {
+                    // An item: the game's own icon of one, a dark veil over it while off.
+                    if !self.bar_item.is_some_and(|item| draw.item(item, [at[0] + 3.0, at[1] + 1.5], 8.0)) {
+                        draw.text("I", [at[0] + 5.0, at[1] + 2.0], tint, false);
+                    }
+                    if !on {
+                        draw.fill([at[0] + 2.0, at[1] + 1.0, 10.0, 9.0], 0xB010_1014);
+                    }
+                }
+            }
             if on {
-                draw.fill([rect[0], rect[1] + 11.0, 13.0, 1.0], argb(class.rgb()));
+                draw.fill([rect[0], rect[1] + 11.0, 14.0, 1.0], 0xFFFF_FFFF);
             }
             hits.push((Hit::Toggle(key), rect));
             if hot {
-                *tip = Some(format!("{words}: {}", if on { "on" } else { "off" }));
+                *tip = Some(format!("{words}: {}", if on { "shown" } else { "hidden" }));
+                *label = Some(words.to_string());
             }
         }
         x += 5.0;

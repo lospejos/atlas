@@ -1,4 +1,4 @@
-# Atlas (`atlas`) 0.3.2
+# Atlas (`atlas`) 0.3.3
 
 A client-side wasm mod for Horizon: a minimap, a full-screen world map of everything you have
 explored (surface, cave layers, the Nether under and over its roof), an entity radar, waypoints
@@ -27,8 +27,9 @@ there (see "Moving from my_map").
   blocks over you and little sky light) or under the Nether's roof, else the surface. *Surface* and
   *Cave* force one. In the Nether the surface is the **top of the roof**, with whatever is built on
   it. Each layer is stored on its own, per dimension.
-- **Bar on the world map** (top left): Auto / Surface (Roof) / Cave, four radar dots (hostile,
-  animals, players, items), Biomes, Grid, Slime, Structures, Filter, PNG. What the cursor is on is
+- **Bar on the world map** (top left): Auto / Surface (Roof) / Cave, four radar switches (a zombie's
+  face for hostile mobs, a cow's for passive ones, the player's for players, an item for items;
+  dimmed while off), Biomes, Grid, Slime, Structures, Filter, PNG. What the cursor is on is
   explained bottom right. The same switches are in Options > Mods > Atlas.
 - **Radar.** Each mob is its **face**: the front of its head, flat, as the game's own texture has
   it (92 vanilla mobs and the player's default face), on a one-pixel dark edge. A dropped item is
@@ -158,9 +159,20 @@ Copy `horizon-mod-data/my_map` to `horizon-mod-data/atlas`, put `mod.atlas:true`
   the head (sniffer's nose, nautilus's shell), and camel is a guess. A dropped item's icon is found
   from its English name (the client is told the name, not the id); an item not found that way is a
   small grey tile.
-- **Labels in the world** are drawn in the mod's own 3 x 5 pixel font, two screen pixels a font
-  pixel: ten screen pixels high at any distance and any GUI scale, upper case only. (The game's
-  text cannot be drawn smaller than the GUI scale makes it.)
+- **Labels in the world** ("Base 125m") are the game's own font at a fixed small size: two
+  screen pixels a font pixel on a window 900 pixels high or more, one below that, and always less
+  than the GUI scale, at any distance. They are placed through the camera's own matrices, the
+  ones the world and the beams are drawn with (view bobbing included; the game's `project` call
+  leaves the bobbing out, which is what made 0.3.2's labels wander against their beams while
+  walking), snapped to whole screen pixels so the glyphs stay sharp. Labels no longer push each
+  other aside, so two close together overlap.
+- **Radar faces** come from the game's entity models: the texture rectangle of the head cube's
+  front face. Where the eyes are on the sides of a long head it is the profile instead: horses,
+  donkeys and mules (muzzle beside head, two rectangles), camels, goats, fish. Slimes, magma
+  cubes, the wither, wolves, bats, parrots, sniffers and nautiluses keep a rectangle chosen by
+  eye because their model's head has no usable front face. Markers move by whole screen pixels,
+  between the positions of the last two ticks (measured on a walking cow: steps of 1 screen
+  pixel at most).
 - **A cave layer never visited** still fills in as it is read (two chunks a tick near you,
   about a second for the minimap's area): only what is stored can be shown at once.
 

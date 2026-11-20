@@ -297,44 +297,63 @@ impl State {
         let _ = host;
     }
 
-    /// Name and distance over each waypoint, where it is on the screen.
+    /// Where world point `at` is on this frame's screen, in GUI pixels: through the camera's own
+    /// matrices, the ones the world is drawn with, view bobbing and all. (The game's `project`
+    /// leaves the bobbing out, so what it places drifts against the world while walking.)
+    pub(crate) fn on_screen(&self, host: &dyn ClientHost, at: [f64; 3]) -> Option<([f32; 2], f64)> {
+        let cam = host.camera()?;
+        let rel = [0, 1, 2].map(|i| (at[i] - cam.position[i]) as f32);
+        // Column-major, the point taken from the camera first.
+        let apply = |m: &[f32; 16], v: [f32; 4]| -> [f32; 4] {
+            std::array::from_fn(|r| (0..4).map(|c| m[c * 4 + r] * v[c]).sum())
+        };
+        let clip = apply(&cam.projection, apply(&cam.view, [rel[0], rel[1], rel[2], 1.0]));
+        if clip[3] <= 1e-4 {
+            return None;
+        }
+        let (nx, ny) = (clip[0] / clip[3], clip[1] / clip[3]);
+        if !(nx.abs() <= 1.0 && ny.abs() <= 1.0) {
+            return None;
+        }
+        let far = rel.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>().sqrt();
+        Some(([(nx + 1.0) / 2.0 * self.gui[0], (1.0 - ny) / 2.0 * self.gui[1]], far))
+    }
+
+    /// Name and distance over each waypoint, where it is on the screen: the game's own font at
+    /// a fixed small size (one or two screen pixels a font pixel, never the full GUI scale), on
+    /// a faint plate as a name tag has. Each label is placed from this frame's camera alone:
+    /// nothing is carried over from the last frame and labels don't push each other about.
     pub(crate) fn draw_labels(&self, host: &dyn ClientHost, draw: &mut dyn DrawContext) {
-        let Some(player) = self.player else { return };
-        let [w, h] = draw.size();
-        // Nearest first, so a nearer label keeps its place and a farther one moves under it.
-        let mut shown = Vec::new();
+        use mod_api::client::hud_layout::PoseOp;
+        use mod_api::{GuiDraw, Text};
+        let [w, _] = draw.size();
+        let scale = host.gui_scale().unwrap_or(2).max(1) as f32;
+        // Screen pixels a font pixel: two on a tall window, one on a small one, and always
+        // under the GUI's own scale.
+        let window = self.gui[1] * scale;
+        let font = (if window >= 900.0 { 2.0f32 } else { 1.0 }).min((scale - 1.0).max(1.0));
+        let k = font / scale;
+        let mut list = Vec::new();
         for (_, wp) in self.here() {
             let at = [f64::from(wp.pos[0]) + 0.5, f64::from(wp.pos[1]) + 1.6, f64::from(wp.pos[2]) + 0.5];
-            let Some([nx, ny, _]) = host.project(at) else { continue };
-            if nx.abs() > 1.0 || ny.abs() > 1.0 {
-                continue;
-            }
-            let d = (0..3).map(|i| (at[i] - player.pos[i]).powi(2)).sum::<f64>().sqrt();
-            let (sx, sy) = ((nx + 1.0) / 2.0 * w, (1.0 - ny) / 2.0 * h);
+            let Some(([sx, sy], far)) = self.on_screen(host, at) else { continue };
             if self.config.hover_names && (sx - w / 2.0).abs() > AIM {
                 continue;
             }
-            shown.push((d, wp, sx, sy));
+            let text = format!("{} {}", wp.name, distance_text(far));
+            let tw = draw.text_width(&text).ceil() as i32;
+            // On whole screen pixels, so the glyphs stay sharp; a screen pixel is the finest
+            // step there is.
+            let snap = |v: f32| (v * scale).round() / scale;
+            list.push(GuiDraw::Push(vec![PoseOp::Translate(snap(sx), snap(sy - 13.0 * k)), PoseOp::Scale(k, k)]));
+            let half = tw / 2 + 2;
+            list.push(GuiDraw::Fill { x0: -half, y0: -2, x1: half + (tw & 1), y1: 9, color: 0x5000_0000 });
+            list.push(GuiDraw::Fill { x0: -half, y0: 9, x1: half + (tw & 1), y1: 10, color: argb(wp.color) });
+            list.push(GuiDraw::Text { text: Text::literal(text), x: -(tw / 2), y: 0, color: 0xFFFF_FFFF, shadow: false });
+            list.push(GuiDraw::Pop);
         }
-        shown.sort_by(|a, b| a.0.total_cmp(&b.0));
-        // Small and the same size on the screen at any distance and any GUI scale: a font pixel
-        // is two screen pixels, so a label is ten screen pixels high.
-        let px = 2.0 / host.gui_scale().unwrap_or(2).max(1) as f32;
-        let mut placed: Vec<[f32; 4]> = Vec::new();
-        for (d, wp, sx, sy) in shown {
-            let text = format!("{} {}", wp.name, distance_text(d));
-            let tw = gfx::tiny_width(&text, px);
-            let high = 9.0 * px;
-            let mut rect = [(sx - tw / 2.0 - 2.0 * px).round(), (sy - high - 2.0).round(), tw + 4.0 * px, high];
-            while placed.iter().any(|p| {
-                rect[0] < p[0] + p[2] && p[0] < rect[0] + rect[2] && rect[1] < p[1] + p[3] && p[1] < rect[1] + rect[3]
-            }) {
-                rect[1] += high + px;
-            }
-            placed.push(rect);
-            draw.fill([rect[0], rect[1], rect[2], high - px], 0x9000_0000);
-            draw.fill([rect[0], rect[1] + high - px, rect[2], px], argb(wp.color));
-            gfx::tiny_text(draw, &text, [rect[0] + 2.0 * px, rect[1] + 1.5 * px], px, 0xFFFF_FFFF);
+        if !list.is_empty() {
+            let _ = draw.gui_paint(&list);
         }
     }
 
