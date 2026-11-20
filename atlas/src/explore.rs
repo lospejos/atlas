@@ -185,6 +185,12 @@ impl Explore {
         n
     }
 
+    /// The marker nearest block `x`, `z` among those worked out: for the test build.
+    pub fn nearest(&self, x: f64, z: f64) -> Option<[i32; 3]> {
+        let far = |m: &&Marker| ((f64::from(m.pos[0]) - x).powi(2) + (f64::from(m.pos[2]) - z).powi(2)) as i64;
+        self.cache.values().flat_map(|c| &c.1).min_by_key(far).map(|m| m.pos)
+    }
+
     /// Whether slime chunks and structures have no seed to be worked out from.
     pub fn seed_missing(&self) -> bool {
         self.seed.is_none()
@@ -251,6 +257,19 @@ fn words(m: &Marker, checked: bool) -> String {
         Status::Approximate => " (about here: within 128 blocks)",
     };
     format!("{name}{how}  X {}  Z {}", m.pos[0], m.pos[2])
+}
+
+/// A marker's name beside the cursor: "Village (possible)", "Trial Chambers".
+fn short(m: &Marker) -> String {
+    let name = match &m.structure {
+        Some(id) => crate::radar::pretty(id),
+        None => m.set.def().label.to_string(),
+    };
+    match m.status {
+        Status::Confirmed => name,
+        Status::Possible => format!("{name} (possible)"),
+        Status::Approximate => format!("{name} (about here)"),
+    }
 }
 
 /// A structure marker: solid when it is certain, hollow when it is only possible.
@@ -346,7 +365,14 @@ impl State {
     }
 
     /// Draws the grid, the slime chunks and the structures over the world map's terrain.
-    pub(crate) fn draw_explore(&mut self, draw: &mut dyn DrawContext, view: View, mouse: [f32; 2], tip: &mut Option<String>) {
+    pub(crate) fn draw_explore(
+        &mut self,
+        draw: &mut dyn DrawContext,
+        view: View,
+        mouse: [f32; 2],
+        tip: &mut Option<String>,
+        label: &mut Option<String>,
+    ) {
         let [w, h] = self.gui;
         let (min, max) = (self.block_at(view, [0.0, 0.0]), self.block_at(view, [w, h]));
         let (min, max) = ([min[0].floor() as i32, min[1].floor() as i32], [max[0].ceil() as i32, max[1].ceil() as i32]);
@@ -432,6 +458,7 @@ impl State {
             mark(draw, *at, rgb, m.status, 3.0);
             if (mouse[0] - at[0]).abs() <= 5.0 && (mouse[1] - at[1]).abs() <= 5.0 {
                 *tip = Some(words(m, checked));
+                *label = Some(short(m));
             }
         }
     }

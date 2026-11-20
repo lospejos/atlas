@@ -80,6 +80,8 @@ pub struct Scanner {
     /// so one read stands for the cell.
     cell_tints: HashMap<(BlockState, u8), u8>,
     cursor: usize,
+    /// A `run` stops starting chunks once it made this many host calls.
+    pub budget: u32,
     pub tick: u64,
     /// Host calls made by the last `run`, and by all of them.
     pub calls: u32,
@@ -99,6 +101,7 @@ impl Scanner {
             untinted: HashMap::new(),
             cell_tints: HashMap::new(),
             cursor: 0,
+            budget: CALL_BUDGET,
             tick: 0,
             calls: 0,
             calls_total: 0,
@@ -334,6 +337,7 @@ impl Scanner {
         let tick = self.tick;
         let cave = matches!(self.layer, Layer::Cave(_));
         let radius = if cave { CAVE_RADIUS } else { RADIUS };
+        self.budget = if cave { CALL_BUDGET * 2 } else { CALL_BUDGET };
         if tick.is_multiple_of(200) {
             let far = |k: &(i32, i32)| (k.0 - center.0).abs().max((k.1 - center.1).abs()) > radius + 4;
             self.seen.retain(|k, _| !far(k));
@@ -343,6 +347,10 @@ impl Scanner {
         let mut done = 0;
         let mut probes = 0;
         'rings: for ring in 0..=radius {
+            // A cave layer just entered: the chunks the minimap shows are read two a tick.
+            if cave && ring > 3 {
+                self.budget = CALL_BUDGET;
+            }
             for (dx, dz) in ring_offsets(ring) {
                 let key = (center.0 + dx, center.1 + dz);
                 if self.seen.contains_key(&key) {
@@ -363,7 +371,7 @@ impl Scanner {
                 } else {
                     self.absent.insert(key, tick);
                 }
-                if done >= fresh || probes >= 64 || self.calls >= CALL_BUDGET {
+                if done >= fresh || probes >= 64 || self.calls >= self.budget {
                     break 'rings;
                 }
             }

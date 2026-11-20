@@ -103,6 +103,16 @@ pub struct Frame {
     pub h: usize,
 }
 
+impl Frame {
+    /// The first and last block the frame shows, with the row north of it that shading reads.
+    pub fn blocks(&self) -> ([i32; 2], [i32; 2]) {
+        (
+            [self.x0, self.z0 - self.step],
+            [self.x0 + (self.w as i32 - 1) * self.step, self.z0 + (self.h as i32 - 1) * self.step],
+        )
+    }
+}
+
 /// Marks the regions `frame` covers as in use and queues the ones still on disk.
 pub fn prepare(store: &mut Store, frame: Frame) {
     let Frame { x0, z0, step, w, h } = frame;

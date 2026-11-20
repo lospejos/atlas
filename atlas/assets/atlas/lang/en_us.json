@@ -55,5 +55,9 @@
   "atlas.setting.bed": "Bed waypoint",
   "atlas.setting.bed.tooltip": "Keep a \"Bed\" waypoint at your respawn point (bed or respawn anchor).",
   "atlas.setting.arrow": "Direction arrow",
-  "atlas.setting.arrow.tooltip": "An arrow at the top of the screen pointing to the tracked waypoint, with its distance. Pick the waypoint with Track in its bubble on the world map."
+  "atlas.setting.arrow.tooltip": "An arrow at the top of the screen pointing to the tracked waypoint, with its distance. Pick the waypoint with Track in its bubble on the world map.",
+  "atlas.setting.radar_style": "Radar style",
+  "atlas.setting.radar_style.tooltip": "Icons: a mob's head where the game has one, else its spawn egg, and a dropped item's own icon. Dots: plain coloured dots.",
+  "atlas.setting.radar_style.icons": "Heads and icons",
+  "atlas.setting.radar_style.dots": "Dots"
 }

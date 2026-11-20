@@ -56,6 +56,56 @@ pub fn arrow(draw: &mut dyn DrawContext, at: [f32; 2], angle: f32, size: f32, ar
     }
 }
 
+/// Vanilla's player marker (`textures/map/decorations/player.png`, 8 x 8): `#` black, `W` white,
+/// `g` and `h` its two greys. It points up.
+const PLAYER: [&str; 8] =
+    ["....#...", "...#g#..", "...#W#..", "..#WWW#.", "..#WWW#.", "..#WWW#.", "..#hWh#.", "...###.."];
+
+/// The player's marker as a map item draws it, turned by `angle` (degrees clockwise from up)
+/// about its middle, `px` GUI pixels a texel. A sprite cannot be turned in the GUI, so each run
+/// of texels is drawn as a turned quad.
+pub fn player_marker(draw: &mut dyn DrawContext, at: [f32; 2], angle: f32, px: f32) {
+    let (s, c) = angle.to_radians().sin_cos();
+    // A texel corner (x right, y down from the icon's middle) on the screen.
+    let point = |x: f32, y: f32| [at[0] + (x * c - y * s) * px, at[1] + (x * s + y * c) * px];
+    for (row, line) in PLAYER.iter().enumerate() {
+        let bytes = line.as_bytes();
+        let mut x = 0;
+        while x < 8 {
+            let kind = bytes[x];
+            let mut end = x + 1;
+            while end < 8 && bytes[end] == kind {
+                end += 1;
+            }
+            let color = match kind {
+                b'#' => 0xFF00_0000u32,
+                b'W' => 0xFFFF_FFFF,
+                b'g' => 0xFFE0_E0E0,
+                b'h' => 0xFFBC_BCBC,
+                _ => 0,
+            };
+            if color != 0 {
+                let (x0, x1, y0, y1) = (x as f32 - 4.0, end as f32 - 4.0, row as f32 - 4.0, row as f32 - 3.0);
+                let (a, b, cc, d) = (point(x0, y0), point(x1, y0), point(x1, y1), point(x0, y1));
+                // Both windings: whichever way the game culls, one shows.
+                draw.quad([a, b, cc, d], color);
+                draw.quad([a, d, cc, b], color);
+            }
+            x = end;
+        }
+    }
+}
+
+/// A name in a small dark box beside the cursor.
+pub fn hover_label(draw: &mut dyn DrawContext, mouse: [f32; 2], text: &str, gui: [f32; 2]) {
+    let tw = draw.text_width(text);
+    let x = (mouse[0] + 8.0).min(gui[0] - tw - 8.0).max(2.0);
+    let y = (mouse[1] - 14.0).max(2.0);
+    draw.fill([x - 3.0, y - 2.0, tw + 6.0, 12.0], 0xF010_0010);
+    draw.fill([x - 3.0, y + 10.0, tw + 6.0, 1.0], BUBBLE_EDGE_TOP);
+    draw.text(text, [x, y], 0xFFFF_FFFF, false);
+}
+
 pub fn centered(draw: &mut dyn DrawContext, text: &str, cx: f32, y: f32, color: u32) {
     let w = draw.text_width(text);
     draw.text(text, [(cx - w / 2.0).round(), y], color, true);

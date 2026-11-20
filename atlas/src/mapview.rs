@@ -105,7 +105,6 @@ pub struct Look {
     /// The cave band, none for the surface.
     pub cave: Option<i32>,
     pub tints: bool,
-    pub tint_revision: u64,
 }
 
 impl State {
@@ -354,12 +353,17 @@ impl State {
 
     // ---- the image ----
 
+    /// What an image is painted from, as one number: it changes with each new column of the
+    /// shown layer and each new tint. A change is painted a few times a second, not at once.
+    pub(crate) fn painted(&self) -> u64 {
+        self.shown().revision + self.legend.revision
+    }
+
     /// What the shown layer looks like now, for telling an image of it stale.
     pub(crate) fn look(&self) -> Look {
         Look {
             cave: if self.shown_cave() { self.band } else { None },
             tints: self.config.tints,
-            tint_revision: if self.config.tints { self.legend.revision } else { 0 },
         }
     }
 
@@ -400,7 +404,7 @@ impl State {
             return;
         }
         let step = around.step;
-        let revision = self.shown().revision;
+        let revision = self.painted();
         let image = self.image.filter(|i| i.full && i.look == look);
         let covered = image.is_some_and(|i| i.frame.step == step && self.covers(i.frame, view));
         let since = image.map_or(u64::MAX, |i| self.now.saturating_sub(i.at));
@@ -416,9 +420,16 @@ impl State {
             _ if zooming || (crate::TEST && self.probe.v02) => around,
             _ => self.map_frame(aim, [0.0; 2], MAP_MARGIN),
         };
+        // Everything stored for the frame is read before it is painted (30 ms a frame at most):
+        // a layer just switched to comes in whole, the image of the one left showing meanwhile.
+        let start = host.millis();
+        let (min, max) = frame.blocks();
+        let store = if look.cave.is_some() { &mut self.cave } else { &mut self.surface };
+        if !store.load_area(min, max, || host.millis().saturating_sub(start) < 30) {
+            return;
+        }
         let mut pixels = std::mem::take(&mut self.pixels);
         let tints = std::mem::take(&mut self.tints);
-        let store = if look.cave.is_some() { &mut self.cave } else { &mut self.surface };
         render::compose(store, &self.palette, if look.tints { &tints } else { &[] }, frame, &mut pixels);
         self.tints = tints;
         self.pixels = pixels;

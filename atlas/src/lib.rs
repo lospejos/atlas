@@ -110,6 +110,8 @@ pub(crate) struct Config {
     passive: bool,
     players: bool,
     items: bool,
+    /// Mob heads, spawn eggs and item icons on the radar instead of dots.
+    icons: bool,
     beams: bool,
     labels: bool,
     hover_names: bool,
@@ -136,6 +138,7 @@ impl Default for Config {
             passive: true,
             players: true,
             items: true,
+            icons: true,
             beams: true,
             labels: true,
             hover_names: false,
@@ -194,6 +197,7 @@ fn settings() -> Vec<SettingSpec> {
         toggle("radar_passive"),
         toggle("radar_players"),
         toggle("radar_items"),
+        choice("radar_style", &["icons", "dots"], 0),
         toggle("beams"),
         toggle("labels"),
         toggle("hover_names"),
@@ -260,6 +264,8 @@ pub(crate) struct State {
     surface: Store,
     /// The cave layer of `band`, open while it is shown.
     cave: Store,
+    /// The cave layers left last, by band, still in memory.
+    spare: Vec<(i32, Store)>,
     /// What the biome and tint numbers in the regions stand for.
     legend: Legend,
     /// The legend's tints in the map's brightnesses, as of `tints_revision`.
@@ -303,6 +309,8 @@ pub(crate) struct State {
     vel: [f64; 2],
     /// What the last draw of the world map put where, topmost last: what a click lands on.
     hits: Vec<(mapscreen::Hit, [f32; 4])>,
+    /// Where the block a bubble opened in the world is about lies on the screen this frame.
+    edit_spot: Option<[f32; 2]>,
     /// The status line's explanation of what the cursor is on.
     tip: Option<String>,
     /// A line shown over the world map for a while: what it says and until when.
@@ -337,7 +345,8 @@ impl Default for State {
             dim: String::new(),
             dim_info: DimInfo::default(),
             surface: Store::keeping(64),
-            cave: Store::keeping(24),
+            cave: Store::keeping(16),
+            spare: Vec::new(),
             legend: Legend::default(),
             tints: Vec::new(),
             tints_revision: u64::MAX,
@@ -368,6 +377,7 @@ impl Default for State {
             cursor: [0.0; 2],
             vel: [0.0; 2],
             hits: Vec::new(),
+            edit_spot: None,
             tip: None,
             notice: None,
             list_scroll: 0.0,
@@ -398,6 +408,20 @@ fn sanitize(name: &str) -> String {
         .collect();
     // The prefix keeps device names (CON, COM1) and a trailing dot away.
     format!("w_{}_", clean)
+}
+
+/// The block the crosshair is on, as far as 256 blocks away: the view's own long raycast, else
+/// a ray from the player's eyes (which only the integrated server answers).
+fn aimed_block(host: &dyn ClientHost) -> (Option<[i32; 3]>, String) {
+    let ray = host.raycast(256.0).map(|hit| [hit.block_x, hit.block_y, hit.block_z]);
+    let view = host.view_hit().filter(|(far, _)| *far <= 256.0).map(|(_, hit)| [hit.block_x, hit.block_y, hit.block_z]);
+    let pick = host
+        .local_player()
+        .and_then(|p| p.entity().pick(host, 256.0))
+        .filter(|hit| !hit.miss)
+        .map(|hit| hit.block);
+    let seen = if TEST { format!("aim: raycast {ray:?} view_hit {view:?} pick {pick:?}") } else { String::new() };
+    (ray.or(view).or(pick), seen)
 }
 
 fn block_of(pos: [f64; 3]) -> [i32; 3] {
@@ -444,7 +468,8 @@ impl State {
         }
         let start = host.millis();
         while host.millis().saturating_sub(start) < 50 {
-            if self.surface.save(1) + self.cave.save(1) == 0 {
+            let spare: usize = self.spare.iter_mut().map(|(_, s)| s.save(1)).sum();
+            if self.surface.save(1) + self.cave.save(1) + spare == 0 {
                 break;
             }
         }
@@ -458,6 +483,9 @@ impl State {
         }
         self.surface.close();
         self.cave.close();
+        for (_, mut store) in self.spare.drain(..) {
+            store.close();
+        }
         self.scan_surface.clear();
         self.scan_cave.clear();
         self.legend = Legend::default();
@@ -524,6 +552,9 @@ impl State {
         self.scan_surface.clear();
         self.scan_cave.clear();
         self.cave.close();
+        for (_, mut store) in self.spare.drain(..) {
+            store.close();
+        }
         self.band = None;
         self.underground = false;
         self.under_ticks = 0;
@@ -559,6 +590,7 @@ impl State {
             passive: on("radar_passive", d.passive),
             players: on("radar_players", d.players),
             items: on("radar_items", d.items),
+            icons: host.setting_choice("radar_style").unwrap_or(0) == 0,
             beams: on("beams", d.beams),
             labels: on("labels", d.labels),
             hover_names: on("hover_names", d.hover_names),
@@ -724,21 +756,33 @@ impl State {
         if cave {
             let band = scan::band(pos[1], self.band);
             if self.band != Some(band) || !self.cave.is_open() {
+                // The layer left stays in memory beside the one entered, so coming back to it
+                // shows it at once. The image in the slot stays too, until the new one is in.
+                let old = std::mem::replace(&mut self.cave, Store::keeping(16));
+                if let (Some(was), true) = (self.band, old.is_open()) {
+                    self.spare.retain(|(b, _)| *b != was);
+                    self.spare.push((was, old));
+                    if self.spare.len() > 2 {
+                        let (_, mut dropped) = self.spare.remove(0);
+                        dropped.close();
+                    }
+                }
+                match self.spare.iter().position(|(b, _)| *b == band) {
+                    Some(at) => self.cave = self.spare.remove(at).1,
+                    None => {
+                        if let Some(dir) = self.dim_dir() {
+                            self.cave.open(host.data_files(), format!("{dir}/cave.{band}"));
+                        }
+                    }
+                }
                 self.band = Some(band);
                 self.scan_cave.clear();
                 self.scan_cave.layer = Layer::Cave(band);
-                if let Some(dir) = self.dim_dir() {
-                    self.cave.open(host.data_files(), format!("{dir}/cave.{band}"));
-                }
-                self.image = None;
             }
             self.scan_cave.run(host, level, &mut self.cave, &mut self.legend, center, 2, 0);
-        } else if self.band.is_some() {
-            self.band = None;
-            self.cave.close();
-            self.image = None;
         }
-        let (fresh, again) = if cave { (1, 2) } else { (5, 8) };
+        // The cave layer stays open while the surface is shown: walking back in finds it.
+        let (fresh, again) = if cave { (2, 4) } else { (5, 8) };
         self.scan_surface.run(host, level, &mut self.surface, &mut self.legend, center, fresh, again);
     }
 }
@@ -765,6 +809,8 @@ impl Atlas {
     /// Opens the mod's screen on the full map, or on the new-waypoint dialog at the player.
     /// True when it is open now.
     fn open(&self, host: &mut dyn ClientHost, map: bool) -> bool {
+        // J in the world: the block the crosshair is on, as far as 256 blocks off.
+        let (aimed, seen) = if map { (None, String::new()) } else { aimed_block(host) };
         {
             let Ok(mut st) = self.state.try_lock() else { return false };
             let (Ui::Closed, Some(player), true) = (&st.ui, st.player, st.world.is_some()) else { return false };
@@ -775,7 +821,16 @@ impl Atlas {
                 st.view = Some(View { cx: pos[0], cz: pos[2], zoom });
                 st.ui = Ui::Map;
             } else {
-                st.ui = Ui::Edit(Edit::new(block_of(pos), st.next_color, false));
+                if TEST {
+                    st.probe_note(host, seen);
+                }
+                let mut edit = Edit::new(block_of(pos), st.next_color, false);
+                if let Some([x, y, z]) = aimed {
+                    edit.pos = [x, y + 1, z];
+                    edit.anchor = Some([f64::from(x) + 0.5, f64::from(y) + 1.0, f64::from(z) + 0.5]);
+                }
+                st.edit_spot = None;
+                st.ui = Ui::Edit(edit);
             }
             st.list_scroll = 0.0;
             st.drag = None;
@@ -873,8 +928,12 @@ impl Hooks for Atlas {
             if !st.legend.dirty {
                 if st.scan_surface.tick.is_multiple_of(100) {
                     st.surface.save(1);
-                } else {
-                    st.cave.save(1);
+                } else if st.cave.save(1) == 0 {
+                    for (_, store) in &mut st.spare {
+                        if store.save(1) > 0 {
+                            break;
+                        }
+                    }
                 }
             }
             if TEST {
@@ -1130,6 +1189,11 @@ impl Hooks for Atlas {
                 if edit.from_map {
                     st.draw_map(host, event.draw, mouse, false);
                 }
+                // The block the bubble is about, where the view has it now.
+                st.edit_spot = edit.anchor.and_then(|at| host.project(at)).and_then(|[nx, ny, _]| {
+                    let on = nx.abs() <= 1.0 && ny.abs() <= 1.0;
+                    on.then_some([(nx + 1.0) / 2.0 * st.gui[0], (1.0 - ny) / 2.0 * st.gui[1]])
+                });
                 st.draw_edit(event.draw, &edit, mouse);
                 st.ui = Ui::Edit(edit);
             }

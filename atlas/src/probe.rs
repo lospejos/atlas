@@ -24,6 +24,9 @@ pub struct Probe {
     cursor_gap: f32,
     cells_max: u32,
     trace: String,
+    /// A layer switch under way: frames drawn since the layer changed, when it began, and the
+    /// longest of those frames in milliseconds.
+    switch: Option<(u32, f64, f64)>,
     /// Milliseconds: the longest save; the client tick hook's sum, longest and count; the
     /// frame hook's.
     pub save_ms: u64,
@@ -120,6 +123,20 @@ impl State {
             ex.flip_set(usize::MAX);
             return true;
         }
+        if short == "h" {
+            // The nearest structure marker to the middle of the screen.
+            if let Some(view) = &mut self.view
+                && let Some(pos) = self.explore.nearest(view.cx, view.cz)
+            {
+                (view.cx, view.cz) = (f64::from(pos[0]) + 0.5, f64::from(pos[2]) + 0.5);
+            }
+            return true;
+        }
+        if short == "i" {
+            host.set_setting(crate::ID, "radar_style", if self.config.icons { "1" } else { "0" });
+            self.read_config(host);
+            return true;
+        }
         if short == "c" {
             let next = (self.config.corner + 1) % 4;
             host.set_setting(crate::ID, "minimap_corner", &next.to_string());
@@ -179,6 +196,10 @@ impl State {
         self.probe_write(host, line);
     }
 
+    pub(crate) fn probe_note(&mut self, host: &dyn ClientHost, line: String) {
+        self.probe_write(host, line);
+    }
+
     pub(crate) fn probe_draw(&mut self, mouse: [f32; 2]) {
         let gap = (mouse[0] - self.cursor[0]).abs().max((mouse[1] - self.cursor[1]).abs());
         self.probe.cursor_gap = self.probe.cursor_gap.max(gap);
@@ -204,6 +225,27 @@ impl State {
                 self.stats.while_panning
             );
             (c.frames, c.moved, c.turned, c.zoomed, c.cells_max) = (0, 0, 0, 0, 0);
+            self.probe_write(host, line);
+        }
+        // From the frame the shown layer changes to the frame its image is in the slot.
+        let want = self.look();
+        let have = self.image.map(|i| i.look);
+        if have.is_some() && have != Some(want) {
+            let s = self.probe.switch.get_or_insert((0, self.clock, 0.0));
+            s.0 += 1;
+            s.2 = s.2.max(dt * 1000.0);
+        } else if let Some((frames, began, worst)) = self.probe.switch.take() {
+            let full = self.image.is_some_and(|i| i.full);
+            let line = format!(
+                "layer switch to {:?} ({}): image in the slot {} frames after the change ({:.0} ms), longest frame {:.1} ms, \
+                 regions still to read {}",
+                want.cave,
+                if full { "world map" } else { "minimap" },
+                frames,
+                (self.clock - began) * 1000.0,
+                worst.max(dt * 1000.0),
+                self.shown().waiting()
+            );
             self.probe_write(host, line);
         }
         let events = std::mem::take(&mut self.probe.events_this_frame);

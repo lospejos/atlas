@@ -54,7 +54,7 @@ impl State {
     /// Keeps the minimap's image current.
     pub(crate) fn refresh_minimap(&mut self, host: &mut dyn ClientHost, player: Player, look: Look) {
         let frame = self.minimap_frame(player, self.minimap_span());
-        let revision = self.shown().revision;
+        let revision = self.painted();
         let soft = self.soft();
         // The old picture still covers the map while the player is within the margin.
         let (old, old_revision, old_at) = if soft {
@@ -79,9 +79,19 @@ impl State {
         // so another mod's picture, or a resource reload, may have replaced this one.
         let paint = urgent || (old_revision != revision && since >= 250) || (!soft && since >= REPAINT);
         if paint {
+            // What is stored for the frame is read first, so a layer switched to comes in whole;
+            // the picture of the one left stays up for the frame or two that may take.
+            let start = host.millis();
+            let (min, max) = frame.blocks();
+            let store = if look.cave.is_some() { &mut self.cave } else { &mut self.surface };
+            if !store.load_area(min, max, || host.millis().saturating_sub(start) < 30) {
+                if soft {
+                    self.refresh_soft(host, player, look);
+                }
+                return;
+            }
             let mut pixels = std::mem::take(if soft { &mut self.soft.src } else { &mut self.pixels });
             let tints = std::mem::take(&mut self.tints);
-            let store = if look.cave.is_some() { &mut self.cave } else { &mut self.surface };
             render::compose(store, &self.palette, if look.tints { &tints } else { &[] }, frame, &mut pixels);
             self.tints = tints;
             if soft {
@@ -270,7 +280,7 @@ impl State {
             marker(draw, [center[0] + o[0] * k, center[1] + o[1] * k], w.color, if k < 1.0 { 1.5 } else { 2.0 });
         }
         let facing = if cfg.rotate { 0.0 } else { player.yaw + 180.0 };
-        gfx::arrow(draw, center, facing, 4.0, 0xFFFF_FFFF);
+        gfx::player_marker(draw, center, facing, 1.0);
         // North, on the rim.
         let north = [center[0] - sin * (side / 2.0 - 5.0), center[1] - cos * (side / 2.0 - 5.0)];
         draw.text("N", [north[0] - 2.5, north[1] - 4.0], 0xFFFF_FFFF, true);

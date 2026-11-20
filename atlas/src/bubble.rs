@@ -37,17 +37,19 @@ pub struct Edit {
     pub target: Option<usize>,
     /// Whether the name was typed in since the bubble opened.
     pub typed: bool,
+    /// Opened in the world on the block the crosshair was on: where the bubble points.
+    pub anchor: Option<[f64; 3]>,
 }
 
 impl Edit {
     pub fn new(pos: [i32; 3], color: usize, from_map: bool) -> Self {
-        Self { name: String::new(), color, pos, from_map, target: None, typed: false }
+        Self { name: String::new(), color, pos, from_map, target: None, typed: false, anchor: None }
     }
 
     /// The bubble for waypoint `index`.
     pub fn of(index: usize, w: &Waypoint) -> Self {
         let color = COLORS.iter().position(|c| *c == w.color).unwrap_or(COLORS.len());
-        Self { name: w.name.clone(), color, pos: w.pos, from_map: true, target: Some(index), typed: false }
+        Self { name: w.name.clone(), color, pos: w.pos, from_map: true, target: Some(index), typed: false, anchor: None }
     }
 
     pub fn type_char(&mut self, c: char) {
@@ -90,7 +92,8 @@ impl State {
         let (bw, bh) = if edit.target.is_some() { (EDIT_W, EDIT_H) } else { (NEW_W, NEW_H) };
         let spot = match (edit.from_map, self.view) {
             (true, Some(view)) => self.screen_at(view, f64::from(edit.pos[0]) + 0.5, f64::from(edit.pos[2]) + 0.5),
-            _ => [w / 2.0, h / 2.0],
+            // In the world: the aimed block as the view shows it, else the crosshair.
+            _ => self.edit_spot.unwrap_or([w / 2.0, h / 2.0]),
         };
         let spot = [spot[0].clamp(12.0, w - 12.0).round(), spot[1].clamp(0.0, h).round()];
         // Clear of the marker or the crosshair.
@@ -134,7 +137,17 @@ impl State {
 
     pub(crate) fn draw_edit(&mut self, draw: &mut dyn DrawContext, edit: &Edit, mouse: [f32; 2]) {
         let Bubble { panel: p, tip, below } = self.bubble(edit);
-        gfx::bubble(draw, p, Some((tip, below)));
+        if edit.from_map || edit.anchor.is_some() {
+            gfx::bubble(draw, p, Some((tip, below)));
+        } else {
+            // Nothing was aimed at: a plain box that says where the waypoint goes.
+            gfx::bubble(draw, p, None);
+            let words = "Where you stand";
+            let tw = draw.text_width(words);
+            let x = (p[0] + (p[2] - tw) / 2.0).round();
+            draw.fill([x - 4.0, p[1] + p[3], tw + 8.0, 11.0], gfx::BUBBLE_BG);
+            draw.text(words, [x, p[1] + p[3] + 1.0], 0xFFC8_C8D8, false);
+        }
 
         // The name, as a vanilla text box in focus.
         let f = field(p);

@@ -3,7 +3,7 @@
 //! what the server shows this client is known: nothing here sees through that.
 use std::collections::HashMap;
 
-use mod_api::{ClientHost, DrawContext, EntityTypeKey, LevelRef};
+use mod_api::{ClientHost, DrawContext, EntityTypeKey, Identifier, ItemKey, LevelRef};
 
 use crate::gfx;
 use crate::{Config, State};
@@ -15,6 +15,39 @@ const REACH_Y: f64 = 24.0;
 const REACH_Y_CAVE: f64 = 14.0;
 /// At most this many dots.
 const MOST: usize = 400;
+/// At most this many of them drawn as icons, the nearest: an item icon costs more than a dot.
+const ICONS: usize = 64;
+/// The mobs that have a head item: that is their icon. The rest take their spawn egg.
+const HEADS: [(&str, &str); 7] = [
+    ("zombie", "zombie_head"),
+    ("creeper", "creeper_head"),
+    ("skeleton", "skeleton_skull"),
+    ("wither_skeleton", "wither_skeleton_skull"),
+    ("piglin", "piglin_head"),
+    ("ender_dragon", "dragon_head"),
+    ("player", "player_head"),
+];
+
+/// The item that stands for entity type `id` on the radar.
+pub fn icon_item(id: &str) -> String {
+    let (space, path) = id.split_once(':').unwrap_or(("minecraft", id));
+    match HEADS.iter().find(|(mob, _)| *mob == path) {
+        Some((_, head)) => format!("minecraft:{head}"),
+        None => format!("{space}:{path}_spawn_egg"),
+    }
+}
+
+/// The item id a dropped item's English name most likely has: "Leaf Litter" is
+/// `minecraft:leaf_litter`. The client is told the name, not the id.
+pub fn item_guess(name: &str) -> Option<String> {
+    let path: String = name
+        .trim()
+        .chars()
+        .map(|c| if c == ' ' { '_' } else { c.to_ascii_lowercase() })
+        .filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_')
+        .collect();
+    (!path.is_empty()).then(|| format!("minecraft:{path}"))
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Class {
@@ -85,14 +118,18 @@ pub struct Blip {
     /// Where it was a tick ago and where it is: a frame draws it in between.
     pub from: [f64; 3],
     pub to: [f64; 3],
-    /// A player's name, or the type's id for the rest.
+    /// What the cursor is told: a player's or an item's name, the type's name for the rest.
     pub name: String,
+    /// The item drawn for it: a head, a spawn egg, the dropped item itself.
+    pub icon: Option<ItemKey>,
 }
 
 #[derive(Default)]
 pub struct Radar {
     pub blips: Vec<Blip>,
-    kinds: HashMap<EntityTypeKey, (Option<Class>, String)>,
+    kinds: HashMap<EntityTypeKey, (Option<Class>, String, Option<ItemKey>)>,
+    /// Dropped items' icons by their names.
+    items: HashMap<String, Option<ItemKey>>,
     last: HashMap<u32, [f64; 3]>,
     /// Host calls the last tick made.
     pub calls: u32,
@@ -136,24 +173,40 @@ impl Radar {
             }
             self.calls += 1;
             let Some(kind) = entity.kind(host) else { continue };
-            let (class, type_id) = self.kinds.entry(kind).or_insert_with(|| {
+            let (class, type_name, icon) = self.kinds.entry(kind).or_insert_with(|| {
                 let id = kind.id(host);
-                (classify(&id), id)
+                let icon = Identifier::parse(&icon_item(&id)).ok().and_then(|item| host.item_key(&item));
+                (classify(&id), pretty(&id), icon)
             });
-            let Some(class) = *class else { continue };
+            let (Some(class), mut icon) = (*class, *icon) else { continue };
             if !class.shown(cfg) {
                 continue;
             }
             self.calls += 1;
             let Some(at) = entity.position(host) else { continue };
-            let name = if class == Class::Player {
+            let name = if matches!(class, Class::Player | Class::Item) {
                 self.calls += 1;
-                entity.name(host).unwrap_or_else(|| "Player".into())
+                entity.name(host).unwrap_or_else(|| type_name.clone())
             } else {
-                type_id.clone()
+                type_name.clone()
             };
+            if class == Class::Item {
+                icon = match self.items.get(&name) {
+                    Some(known) => *known,
+                    None => {
+                        let found = item_guess(&name)
+                            .and_then(|id| Identifier::parse(&id).ok())
+                            .and_then(|item| host.item_key(&item));
+                        if self.items.len() > 2000 {
+                            self.items.clear();
+                        }
+                        self.items.insert(name.clone(), found);
+                        found
+                    }
+                };
+            }
             now.insert(id, at);
-            self.blips.push(Blip { class, from: self.last.get(&id).copied().unwrap_or(at), to: at, name });
+            self.blips.push(Blip { class, from: self.last.get(&id).copied().unwrap_or(at), to: at, name, icon });
         }
         self.last = now;
         self.calls_total += u64::from(self.calls);
@@ -190,6 +243,8 @@ impl State {
         place: impl Fn(f64, f64) -> Option<[f32; 2]>,
     ) -> Option<String> {
         let mut hovered = None;
+        let icons = self.config.icons;
+        let mut drawn = 0;
         // Items under mobs under players.
         for class in [Class::Item, Class::Passive, Class::Hostile, Class::Player] {
             for blip in self.radar.blips.iter().filter(|b| b.class == class) {
@@ -198,18 +253,39 @@ impl State {
                 let x = blip.from[0] + (blip.to[0] - blip.from[0]) * t;
                 let z = blip.from[2] + (blip.to[2] - blip.from[2]) * t;
                 let Some(at) = place(x, z) else { continue };
-                let r = size
-                    * match class {
-                        Class::Item => 0.7,
-                        Class::Player => 1.5,
-                        _ => 1.0,
-                    };
-                gfx::dot(draw, at, class.rgb(), r);
+                let mut reach = 4.0;
+                match blip.icon.filter(|_| icons && drawn < ICONS) {
+                    Some(item) => {
+                        // The mob's head or spawn egg, the item itself: on a thin ring in the
+                        // class's colour, so hostile reads at a glance.
+                        let side = (size * if class == Class::Item { 4.5 } else { 6.0 }).round();
+                        let corner = [(at[0] - side / 2.0).round(), (at[1] - side / 2.0).round()];
+                        if class != Class::Item {
+                            draw.fill([corner[0] - 1.0, corner[1] - 1.0, side + 2.0, side + 2.0], 0xC000_0000 | class.rgb());
+                            draw.fill([corner[0], corner[1], side, side], 0xB010_1014);
+                        }
+                        if draw.item(item, corner, side) {
+                            drawn += 1;
+                        } else {
+                            gfx::dot(draw, at, class.rgb(), size);
+                        }
+                        reach = side / 2.0 + 1.0;
+                    }
+                    None => {
+                        let r = size
+                            * match class {
+                                Class::Item => 0.7,
+                                Class::Player => 1.5,
+                                _ => 1.0,
+                            };
+                        gfx::dot(draw, at, class.rgb(), r);
+                    }
+                }
                 if let Some(m) = mouse
-                    && (m[0] - at[0]).abs() <= 4.0
-                    && (m[1] - at[1]).abs() <= 4.0
+                    && (m[0] - at[0]).abs() <= reach
+                    && (m[1] - at[1]).abs() <= reach
                 {
-                    hovered = Some(if class == Class::Player { blip.name.clone() } else { pretty(&blip.name) });
+                    hovered = Some(blip.name.clone());
                 }
             }
         }
@@ -231,5 +307,11 @@ mod tests {
         assert_eq!(classify("minecraft:oak_boat"), None);
         assert_eq!(classify("somemod:deer"), Some(Class::Passive));
         assert_eq!(pretty("minecraft:zombie_villager"), "Zombie Villager");
+        assert_eq!(icon_item("minecraft:creeper"), "minecraft:creeper_head");
+        assert_eq!(icon_item("minecraft:wither_skeleton"), "minecraft:wither_skeleton_skull");
+        assert_eq!(icon_item("minecraft:cow"), "minecraft:cow_spawn_egg");
+        assert_eq!(icon_item("somemod:deer"), "somemod:deer_spawn_egg");
+        assert_eq!(item_guess("Leaf Litter").as_deref(), Some("minecraft:leaf_litter"));
+        assert_eq!(item_guess("Bottle o' Enchanting").as_deref(), Some("minecraft:bottle_o_enchanting"));
     }
 }

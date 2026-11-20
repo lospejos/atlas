@@ -231,6 +231,28 @@ impl Store {
         self.dir = Some("mem".into());
     }
 
+    /// Reads now every region with a file that the blocks from `min` to `max` (x, z) are in,
+    /// while `more` allows. False when it had to stop before all were in memory.
+    pub fn load_area(&mut self, min: [i32; 2], max: [i32; 2], mut more: impl FnMut() -> bool) -> bool {
+        for rz in min[1].div_euclid(REGION)..=max[1].div_euclid(REGION) {
+            for rx in min[0].div_euclid(REGION)..=max[0].div_euclid(REGION) {
+                let key = (rx, rz);
+                if self.on_disk.contains(&key) && !self.regions.contains_key(&key) {
+                    if !more() {
+                        return false;
+                    }
+                    self.load(key);
+                }
+            }
+        }
+        true
+    }
+
+    /// How many regions are queued to be read.
+    pub fn waiting(&self) -> usize {
+        self.wanted.len()
+    }
+
     /// Every region there is, in memory or in a file.
     pub fn known(&self) -> Vec<(i32, i32)> {
         let mut keys: HashSet<(i32, i32)> = self.on_disk.clone();

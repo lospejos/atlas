@@ -1,4 +1,4 @@
-# Atlas (`atlas`) 0.3.0
+# Atlas (`atlas`) 0.3.1
 
 A client-side wasm mod for Horizon: a minimap, a full-screen world map of everything you have
 explored (surface, cave layers, the Nether under and over its roof), an entity radar, waypoints
@@ -21,16 +21,23 @@ there (see "Moving from my_map").
   position (÷8 / ×8).
 - **Dragging** keeps the block you grabbed exactly under the cursor on every frame, and glides on
   for about a quarter of a second when you let go in motion (a click stops it).
-- **Layers.** *Auto* shows the cave layer at your height while you are under ground (a roof of
+- **You** are vanilla's map marker (the white pointer of a map item), turned as you look.
+- **Layers.** Switching is immediate: the image of the layer left stays up until the new one is
+  painted whole from what is stored (measured: in the slot one frame after the change). *Auto* shows the cave layer at your height while you are under ground (a roof of
   blocks over you and little sky light) or under the Nether's roof, else the surface. *Surface* and
   *Cave* force one. In the Nether the surface is the **top of the roof**, with whatever is built on
   it. Each layer is stored on its own, per dimension.
 - **Bar on the world map** (top left): Auto / Surface (Roof) / Cave, four radar dots (hostile,
   animals, players, items), Biomes, Grid, Slime, Structures, Filter, PNG. What the cursor is on is
   explained bottom right. The same switches are in Options > Mods > Atlas.
-- **Radar.** Hostile mobs red, other mobs green, players white, dropped items small and yellow, on
-  both maps; the world map names the one under the cursor. Only what the server shows your client.
-- **Waypoints.** Right-click the map or press J: the bubble asks for a name and a colour. Click a
+- **Radar.** Icons by default: a mob's **head** where the game has a head item (zombie, creeper,
+  skeleton, wither skeleton, piglin, dragon, player), else its **spawn egg**, on a thin ring (red
+  hostile, green other, white player); a dropped item is its own icon. The world map names the one
+  under the cursor, beside it. "Radar style: Dots" brings the plain dots back. Only what the
+  server shows your client.
+- **Waypoints.** Right-click the map or press J: the bubble asks for a name and a colour. **J in
+  the world puts the waypoint on the block the crosshair is on** (up to 256 blocks away) and the
+  bubble points at that block; with nothing aimed at it is a plain box that says "Where you stand". Click a
   marker, or right-click a row of the list: the same bubble with **Move here, Hide / Show,
   Track / Untrack, Link, Share, Delete**; typing renames, a swatch recolours (Enter keeps the name).
   The list is this dimension's nearest first, then the other dimensions' greyed with their
@@ -69,7 +76,7 @@ Esc or M (close). In the bubble: Enter saves, Esc cancels, Tab next colour, Dele
 
 Show minimap, size (48-200), zoom (4x-1/4x), corner, round, turns with you, coordinates,
 Nether / Overworld coordinates (off), map layer (Auto), biome colours (on), radar hostile /
-animals / players / items (on), beams, labels, names only on hover, death / spawn / bed waypoints
+animals / players / items (on), radar style (heads and icons / dots), beams, labels, names only on hover, death / spawn / bed waypoints
 (on), direction arrow (off). The explore overlays and the structure filter are kept in
 `horizon-mod-data/atlas/explore.txt`, a typed seed in `<world>/seed.txt`.
 
@@ -137,6 +144,17 @@ Copy `horizon-mod-data/my_map` to `horizon-mod-data/atlas`, put `mod.atlas:true`
 | Structure checks | one lookup a server tick at most, none in the first 10 s or while ticks run over 12 ms |
 
 ## Known limits
+
+- **J at a distance** uses the client's own raycast first, then a ray the integrated server
+  answers. In the test the client's raycast found ground 8 blocks away but not a one-block pillar
+  30 blocks away; the server's did. So on someone else's server a far or thin target may not be
+  found, and J falls back to the plain "Where you stand" box.
+- **Radar icons**: a dropped item's icon is found from its English name (the client is told the
+  name, not the id): other languages and odd names get the yellow dot. Player heads are the
+  default head, not the player's skin. Mobs without a spawn egg get a dot. At most 64 icons are
+  drawn, the rest as dots. Icons cost about 0.05 ms a frame more than dots with 11 entities.
+- **A cave layer never visited** still fills in as it is read (two chunks a tick near you,
+  about a second for the minimap's area): only what is stored can be shown at once.
 
 - **A hook call that runs past about 100 ms (wall clock) is cut off by the game and the whole mod
   is stopped until restart.** Everything here is sliced to stay far below (exports, saves on

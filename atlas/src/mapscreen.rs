@@ -98,9 +98,12 @@ impl State {
         let mut hits = std::mem::take(&mut self.hits);
         hits.clear();
         let mut tip: Option<String> = None;
+        // The name of the radar icon or structure under the cursor, shown beside it.
+        let mut label: Option<String> = None;
         draw.fill([0.0, 0.0, w, h], UNSEEN_COLOR);
         self.draw_mosaic(draw, view);
-        if let Some(image) = self.image.filter(|i| i.full && i.look == self.look()) {
+        // The image in the slot, even one of the layer just left: the new one replaces it whole.
+        if let Some(image) = self.image.filter(|i| i.full) {
             let f = image.frame;
             // The image as it lies under this frame's view, to a fraction of a pixel.
             let at = self.screen_at(view, f64::from(f.x0), f64::from(f.z0));
@@ -135,11 +138,12 @@ impl State {
             }
         }
 
-        self.draw_explore(draw, view, mouse, &mut tip);
+        self.draw_explore(draw, view, mouse, &mut tip, &mut label);
 
         // The entities near the player.
         let on_map = |x: f64, z: f64| Some(self.screen_at(view, x, z));
         if let Some(name) = self.draw_blips(draw, f64::from(self.partial), Some(mouse), 1.5, on_map) {
+            label = Some(name.clone());
             tip = Some(name);
         }
 
@@ -164,7 +168,7 @@ impl State {
             }
         }
         if let Some(player) = self.player {
-            gfx::arrow(draw, self.screen_at(view, player.pos[0], player.pos[2]), player.yaw + 180.0, 5.0, 0xFFFF_FFFF);
+            gfx::player_marker(draw, self.screen_at(view, player.pos[0], player.pos[2]), player.yaw + 180.0, 1.25);
         }
 
         let below = self.draw_bar(draw, mouse, &mut hits, &mut tip);
@@ -232,6 +236,9 @@ impl State {
             draw.fill([(w - tw) / 2.0 - 5.0, 34.0, tw + 10.0, 13.0], 0xE010_1014);
             centered(draw, &text, w / 2.0, 37.0, 0xFFFF_E080);
         }
+        if let Some(text) = label.filter(|_| live && !hits.iter().any(|(hit, r)| !matches!(hit, Hit::Marker(_)) && inside(*r, mouse))) {
+            gfx::hover_label(draw, mouse, &text, self.gui);
+        }
         self.hits = hits;
         let _ = host;
     }
@@ -244,7 +251,7 @@ impl State {
         self.stats.cells = 0;
         let look = self.look();
         // The image's rectangle on the screen: cells wholly inside it are its to draw.
-        let held = self.image.filter(|i| i.full && i.look == look).map(|i| {
+        let held = self.image.filter(|i| i.full).map(|i| {
             let at = self.screen_at(view, f64::from(i.frame.x0), f64::from(i.frame.z0));
             let k = i.frame.step as f32 * view.zoom;
             [at[0], at[1], at[0] + i.frame.w as f32 * k, at[1] + i.frame.h as f32 * k]
@@ -490,7 +497,6 @@ impl State {
         match self.hit(mouse) {
             Some(Hit::Mode(mode)) => {
                 self.set_mode(host, mode);
-                self.image = None;
             }
             Some(Hit::Toggle(key)) => self.flip(host, key),
             Some(Hit::Overlay(i)) => {
