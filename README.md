@@ -1,4 +1,4 @@
-# Atlas
+# World Atlas
 
 A minimap, world map and waypoints mod for [Horizon](https://github.com/horizon-rust/horizon)
 (Minecraft: Java Edition 26.3 in Rust). A WebAssembly `.hmod`: nothing to compile, and it runs in
@@ -84,16 +84,27 @@ the game's sandbox.
 
 ## Install
 
-1. Download `atlas-<version>.hmod` from [Releases](../../releases).
+Once it's listed in the Horizon registry: the launcher's Mods page → Horizon → World Atlas → Install. By hand:
+
+1. Download `world_atlas-<version>.hmod` from [Releases](../../releases).
 2. Open your game folder (launcher → your instance's ⋮ → Open folder) and put the file in the
    `horizon-mods/` folder there. **A new install doesn't have that folder yet: create it yourself**
-   (named exactly `horizon-mods`). Don't use `horizon-native-mods/`: Atlas isn't a native mod, and the
+   (named exactly `horizon-mods`). Don't use `horizon-native-mods/`: World Atlas isn't a native mod, and the
    launcher refuses it there with "not a native package".
-3. Add the line `mod.atlas:true` to `horizon-mods.txt` in the same game folder, next to `options.txt`
+3. Add the line `mod.world_atlas:true` to `horizon-mods.txt` in the same game folder, next to `options.txt`
    (create the file if it isn't there).
 4. Restart the game.
 
-Needs Horizon Nightly 2026-11-20 (0a875da) or newer. Coming from 0.3.x: your map and waypoints
+Needs Horizon Nightly 2026-11-20 (0a875da) or newer.
+
+**Coming from Atlas 0.4.0 or older** (id `atlas`): since 0.4.1 it's called World Atlas (`world_atlas`),
+because the registry's id `atlas` belongs to another author's earlier mod. A mod can only reach its own
+folders, so copy your data over once, with the game closed: `horizon-mod-data/atlas/` to
+`horizon-mod-data/world_atlas/` and `horizon-mods/.horizon-mod-data/atlas/` to
+`horizon-mods/.horizon-mod-data/world_atlas/`. Then remove the old `.hmod` and change `mod.atlas:true` to
+`mod.world_atlas:true`. Rebound keys go back to their defaults once; `/atlas` keeps its name.
+
+Coming from 0.3.x: your map and waypoints
 carry over; don't go back to 0.3.x afterwards (it can't read the new icon and flags).
 
 ## Keys

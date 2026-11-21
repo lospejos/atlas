@@ -48,7 +48,7 @@ use scan::{Layer, Scanner};
 use store::{Legend, Store};
 use waypoints::{Kind, Waypoint};
 
-pub const ID: &str = "atlas";
+pub const ID: &str = "world_atlas";
 /// The atlas slot `mod_image` paints.
 const SPRITE: &str = "horizon/modimage";
 /// The slot's side in texels.
@@ -302,19 +302,19 @@ const TOGGLES: [(&str, bool); 21] = [
 ];
 
 fn settings() -> Vec<SettingSpec> {
-    let label = |key: &str| format!("atlas.setting.{key}");
+    let label = |key: &str| format!("world_atlas.setting.{key}");
     let toggle = |key: &str| {
         let default = TOGGLES.iter().find(|t| t.0 == key).is_some_and(|t| t.1);
-        SettingSpec::toggle(key, label(key), default).tooltip(format!("atlas.setting.{key}.tooltip"))
+        SettingSpec::toggle(key, label(key), default).tooltip(format!("world_atlas.setting.{key}.tooltip"))
     };
     let choice = |key: &str, options: &[&str], default: usize| {
-        let options: Vec<String> = options.iter().map(|o| format!("atlas.setting.{key}.{o}")).collect();
-        SettingSpec::choice(key, label(key), options, default).tooltip(format!("atlas.setting.{key}.tooltip"))
+        let options: Vec<String> = options.iter().map(|o| format!("world_atlas.setting.{key}.{o}")).collect();
+        SettingSpec::choice(key, label(key), options, default).tooltip(format!("world_atlas.setting.{key}.tooltip"))
     };
     let mut list = vec![
         toggle("minimap"),
         SettingSpec::range("minimap_size", label("minimap_size"), 48.0, 200.0, 8.0, 96.0)
-            .tooltip("atlas.setting.minimap_size.tooltip"),
+            .tooltip("world_atlas.setting.minimap_size.tooltip"),
         choice("minimap_zoom", &["4x", "2x", "1x", "half", "quarter"], 2),
         choice("minimap_corner", &["top_right", "top_left", "bottom_right", "bottom_left"], 0),
         toggle("minimap_round"),
@@ -1262,13 +1262,13 @@ impl Hooks for Atlas {
             (KEY_ENLARGE, "key.keyboard.z"),
         ] {
             r.register_key_mapping(
-                KeyRegistration::new(id, key).label(&format!("key.atlas.{id}")).context(KeyConflictContext::InGame),
+                KeyRegistration::new(id, key).label(&format!("key.world_atlas.{id}")).context(KeyConflictContext::InGame),
             );
         }
         r.register_key_mapping(
             KeyRegistration::new(KEY_WAYPOINT_TEMP, "key.keyboard.j")
                 .modifiers(mod_api::ClientModifiers::new(1))
-                .label(&format!("key.atlas.{KEY_WAYPOINT_TEMP}"))
+                .label(&format!("key.world_atlas.{KEY_WAYPOINT_TEMP}"))
                 .context(KeyConflictContext::InGame),
         );
         for setting in settings() {
@@ -1469,9 +1469,9 @@ impl Hooks for Atlas {
     }
 
     /// The radar's faces: an atlas whose definition cuts them out of the game's own entity
-    /// textures (`assets/atlas/atlases/radar.json`). The game stitches them into its GUI atlas.
+    /// textures (`assets/world_atlas/atlases/radar.json`). The game stitches them into its GUI atlas.
     fn register_texture_atlases(&self, _: &RegistrationContext, event: &mut mod_api::RegisterTextureAtlasesEvent<'_>) {
-        if let Ok(id) = mod_api::Identifier::parse("atlas:radar") {
+        if let Ok(id) = mod_api::Identifier::parse("world_atlas:radar") {
             event.atlases.push(mod_api::TextureAtlasRegistration { atlas: id.clone(), definition: id });
         }
     }
@@ -1924,12 +1924,12 @@ mod tests {
 
     #[test]
     fn every_setting_has_its_words() {
-        let lang = include_str!("../assets/atlas/lang/en_us.json");
+        let lang = include_str!("../assets/world_atlas/lang/en_us.json");
         for setting in settings() {
-            assert!(lang.contains(&format!("\"atlas.setting.{}\"", setting.key)), "{}", setting.key);
+            assert!(lang.contains(&format!("\"world_atlas.setting.{}\"", setting.key)), "{}", setting.key);
         }
         for key in [KEY_MINIMAP, KEY_MAP, KEY_WAYPOINT, KEY_WAYPOINT_TEMP, KEY_ZOOM_IN, KEY_ZOOM_OUT, KEY_ENLARGE] {
-            assert!(lang.contains(&format!("\"key.atlas.{key}\"")));
+            assert!(lang.contains(&format!("\"key.world_atlas.{key}\"")));
         }
     }
 

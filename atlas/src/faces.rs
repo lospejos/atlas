@@ -1,5 +1,5 @@
 //! The faces the radar draws: for each entity type, the front of its head as vanilla's own
-//! texture has it. No pixels are shipped: `assets/atlas/atlases/radar.json` tells the game
+//! texture has it. No pixels are shipped: `assets/world_atlas/atlases/radar.json` tells the game
 //! which rectangle of which of its entity textures to cut out (an atlas `unstitch` source), and
 //! the game stitches those into its GUI atlas under `atlas:gui/atlases/radar/atlas/<type>`. A
 //! resource pack that changes a mob's texture changes its face here with it.
@@ -136,7 +136,7 @@ pub fn sprites(index: usize) -> Vec<String> {
         .take(face.parts.len())
         .copied()
         .chain(eyes)
-        .map(|suffix| format!("atlas:gui/atlases/radar/atlas/{}{suffix}", face.name))
+        .map(|suffix| format!("world_atlas:gui/atlases/radar/world_atlas/{}{suffix}", face.name))
         .collect()
 }
 
@@ -146,14 +146,14 @@ mod tests {
 
     #[test]
     fn every_face_is_in_the_atlas_definition_and_found() {
-        let definition = include_str!("../assets/atlas/atlases/radar.json");
+        let definition = include_str!("../assets/world_atlas/atlases/radar.json");
         assert!(FACES.windows(2).all(|w| w[0].name < w[1].name), "sorted for the search");
         for (i, face) in FACES.iter().enumerate() {
             assert!(!face.parts.is_empty() && face.parts.len() <= 3, "{}", face.name);
             for (part, sprite) in face.parts.iter().zip(sprites(i)) {
                 assert!(part[0] + part[2] <= face.w && part[1] + part[3] <= face.h, "{}", face.name);
                 let short = sprite.rsplit('/').next().unwrap_or("");
-                assert!(definition.contains(&format!("\"sprite\": \"atlas:{short}\"")), "{short}");
+                assert!(definition.contains(&format!("\"sprite\": \"world_atlas:{short}\"")), "{short}");
             }
             assert_eq!(index(face.name), Some(i));
             // Square enough to read: no sliver.
@@ -164,7 +164,7 @@ mod tests {
             let i = index(name).unwrap();
             assert_eq!(FACES[i].parts.len(), 1, "{name}: eyes go over one part");
             assert!(sprites(i)[1].ends_with("_eyes"));
-            assert!(definition.contains(&format!("\"sprite\": \"atlas:{name}_eyes\"")), "{name}");
+            assert!(definition.contains(&format!("\"sprite\": \"world_atlas:{name}_eyes\"")), "{name}");
         }
         // Nothing but vanilla's own textures is named: no picture is shipped.
         assert_eq!(definition.matches("\"resource\": \"minecraft:entity/").count(), FACES.len() + EYES.len());

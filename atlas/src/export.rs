@@ -137,7 +137,7 @@ impl State {
         let written = ConfigPath::new(&path).is_ok_and(|p| host.data_files().write(&p, &bytes).is_ok());
         let text = if written {
             format!(
-                "Map saved: horizon-mod-data/atlas/{path} in the game folder ({w} x {h} px, {} KiB)",
+                "Map saved: horizon-mod-data/world_atlas/{path} in the game folder ({w} x {h} px, {} KiB)",
                 bytes.len() / 1024
             )
         } else {

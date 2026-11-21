@@ -1,4 +1,4 @@
-# Atlas (`atlas`) 0.4.0
+# World Atlas (`world_atlas`) 0.4.1
 
 A client-side wasm mod for Horizon: a minimap, a full-screen world map of everything you have
 explored (surface, cave layers, the Nether under and over its roof), an entity radar, waypoints
@@ -6,7 +6,7 @@ you can edit, share and link through portals, a PNG export, and overlays worked 
 (chunk grid, slime chunks, structures). API only: no `[[inject]]`, no native code.
 
 It was `my_map` ("Map & Waypoints") up to 0.2.0. Its files are the same: copy
-`horizon-mod-data/my_map/` to `horizon-mod-data/atlas/` and the explored map and the waypoints are
+`horizon-mod-data/my_map/` to `horizon-mod-data/world_atlas/` and the explored map and the waypoints are
 there (see "Moving from my_map").
 
 ## What it does
@@ -95,7 +95,7 @@ there (see "Moving from my_map").
 - **Biome colours** (on by default): grass, leaves and water in the colour the game tints them
   with where they are, instead of a map item's one green and one blue.
 - **PNG**: writes everything explored on the shown layer of this dimension to
-  `horizon-mod-data/atlas/export/<world>-<dimension>-<layer>.png` in the game folder; the path is
+  `horizon-mod-data/world_atlas/export/<world>-<dimension>-<layer>.png` in the game folder; the path is
   shown on the map and in chat.
 - **Explore overlays** (from `mods/atlas-explore`): chunk and region **grid**; **slime chunks**
   (exact from the seed); **structures**. In single player / as LAN host the seed is read by the
@@ -123,7 +123,7 @@ Esc or M (close). In the bubble: Enter saves, Esc cancels, **Tab / Shift+Tab mov
 and X, Y, Z**, Delete (in the name) deletes. With the icon picker open the typing goes to its
 search, Esc closes the picker first.
 
-## Settings (Options > Mods > Atlas)
+## Settings (Options > Mods > World Atlas)
 
 Show minimap, size (48-200), zoom (4x-1/4x), corner, round, turns with you, coordinates,
 Nether / Overworld coordinates (off), hide under F3 (on), hide in menus and chat (on), map layer
@@ -132,9 +132,9 @@ dots), radar names on hover (on), waypoint beams (on), hide beam within (off, 8,
 blocks; 16), max beam distance (500 to 10000 blocks, unlimited), waypoint labels (on), names only
 on hover (off), death waypoint (on), deaths kept (1, 3, 5; 3), spawn / bed waypoints (on),
 direction arrow (off), compass bar (off). The explore overlays and the structure filter are kept in
-`horizon-mod-data/atlas/explore.txt`, a typed seed in `<world>/seed.txt`.
+`horizon-mod-data/world_atlas/explore.txt`, a typed seed in `<world>/seed.txt`.
 
-## Files (`horizon-mod-data/atlas/` in the game folder)
+## Files (`horizon-mod-data/world_atlas/` in the game folder)
 
 - `sp/w_<save folder>_/` or `mp/w_<server address>_/` per world (every character but letters,
   digits, `.`, `-` and `_` becomes `_`; a name with characters past ASCII, `Haus ä`, gets a hash of
@@ -158,9 +158,24 @@ direction arrow (off), compass bar (off). The explore overlays and the structure
     read `MMR2`, so going back to 0.2 means going back to a copy.
 - `export/*.png`, `explore.txt`.
 
+### Moving from Atlas 0.4.0 (`atlas`)
+
+0.4.1 is the same mod under a new id, `world_atlas`: the registry's id `atlas` belongs to another
+author's earlier mod. A mod can only reach its own folders, so World Atlas can't take the old
+ones over by itself. Once, with the game closed, in the game folder:
+
+1. Copy `horizon-mod-data/atlas/` to `horizon-mod-data/world_atlas/` (the explored map and the
+   waypoints) and `horizon-mods/.horizon-mod-data/atlas/` to
+   `horizon-mods/.horizon-mod-data/world_atlas/` (the settings).
+2. In `horizon-mods/`, replace `atlas.hmod` (or `atlas-0.4.0.hmod`) with the new file, and in
+   `horizon-mods.txt` write `mod.world_atlas:true` instead of `mod.atlas:true`.
+
+Keys you rebound in Options > Controls go back to their defaults once. The `/atlas` command keeps
+its name.
+
 ### Moving from my_map
 
-Copy `horizon-mod-data/my_map` to `horizon-mod-data/atlas`, put `mod.atlas:true` in
+Copy `horizon-mod-data/my_map` to `horizon-mod-data/world_atlas`, put `mod.atlas:true` in
 `horizon-mods.txt` instead of `mod.my_map:true`. Two things to know:
 
 - **The first time a world opens the game says "Missing mods: 1 (my_map)"** and warns about removed
@@ -281,8 +296,8 @@ Copy `horizon-mod-data/my_map` to `horizon-mod-data/atlas`, put `mod.atlas:true`
 
 ```sh
 cargo horizon-mod build --wasm
-cargo horizon-mod check target/horizon-mod/atlas.hmod
-cargo test --lib     # 62 tests: file formats, waypoints, icons, scrollbars, drag, PNG, …
+cargo horizon-mod check target/horizon-mod/world_atlas.hmod
+cargo test     # 32 tests: formats, 0.2 files, drag, glide, slide, PNG, …
 ```
 
 `TEST` in `src/lib.rs` (off in the shipped build) turns on `src/probe.rs`: it writes `probe.log`
