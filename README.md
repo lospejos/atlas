@@ -85,8 +85,12 @@ the game's sandbox.
 ## Install
 
 1. Download `atlas-<version>.hmod` from [Releases](../../releases).
-2. Put it in your game folder's `horizon-mods/` (launcher → your instance's ⋮ → Open folder).
-3. Add the line `mod.atlas:true` to `horizon-mods.txt` (next to `options.txt`).
+2. Open your game folder (launcher → your instance's ⋮ → Open folder) and put the file in the
+   `horizon-mods/` folder there. **A new install doesn't have that folder yet: create it yourself**
+   (named exactly `horizon-mods`). Don't use `horizon-native-mods/`: Atlas isn't a native mod, and the
+   launcher refuses it there with "not a native package".
+3. Add the line `mod.atlas:true` to `horizon-mods.txt` in the same game folder, next to `options.txt`
+   (create the file if it isn't there).
 4. Restart the game.
 
 Needs Horizon Nightly 2026-11-20 (0a875da) or newer. Coming from 0.3.x: your map and waypoints
