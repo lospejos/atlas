@@ -17,8 +17,10 @@ Goal: teleport to a waypoint or to any point of the world map from World Atlas.
 1. [x] CI for atlas (`.github/workflows/build.yml`), branch `teleport`.
 2. [x] `/atlas tp <x> <y> <z> [dimension]` through `send_chat`; check it in single player and on a server.
    Verified in single player (cheats world): same-dimension and `nether` jumps both work (CI build of branch `teleport`). A server is not tried yet.
-3. [ ] Waypoints: a Teleport button in the bubble and in the list's right-click; another dimension through
-   `/execute in <dim> run tp @s ...` (done in `waypoints::tp_command`).
+3. [x] Waypoints: a Teleport button in the bubble (the list's right-click opens the same bubble); another dimension through
+   `/execute in <dim> run tp @s ...` (`waypoints::tp_command`). Setting `teleport` (off by default) gates the button, the typed
+   `/atlas tp` always works. Verified in game: Nether to an Overworld waypoint. Mod settings are plain files in
+   `horizon-mods/.horizon-mod-data/world_atlas/<key>`, read at world join (useful for tests).
 4. [ ] Any map point: "Teleport here" on a right click. Y: surface height if the chunk is loaded; else `/tp` to the
    world's top, wait for the chunk, read the height, `/tp` to the surface. Nether and caves: the player's Y.
 5. [ ] Guard: setting "teleport", off by default; an optional confirmation for far jumps; errors to chat; README, lang.
