@@ -654,6 +654,7 @@ impl State {
                 }
                 self.outbox.push(waypoints::tp_command(wp.pos, &wp.dim, &self.dim));
                 self.note(format!("Teleporting to \"{}\"", wp.name));
+                self.close = true;
             }
             Act::Delete => {
                 self.waypoints.remove(index);
@@ -679,6 +680,7 @@ impl State {
             self.outbox.push(waypoints::tp_command(pos, &self.dim, &self.dim));
         }
         self.note(format!("Teleporting to {} {} {}", pos[0], pos[1], pos[2]));
+        self.close = true;
         true
     }
 

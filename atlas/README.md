@@ -83,7 +83,7 @@ there (see "Moving from my_map").
     does the same for any place and always works (`~` for your own).
     The new-waypoint bubble (right-click an empty spot of the map) has a Teleport button too: an explored
     spot gets a plain `/tp`; an unseen one first drops you from the world top (slow falling) and then moves you
-    onto the ground once its chunk has loaded.
+    onto the ground once its chunk has loaded. The map closes after a Teleport.
   - **`/atlas add <name> <x> <y> <z> [dimension]`** adds one from chat (`~` for your own
     coordinate, `~5` relative; a name of several words, or in double quotes; dimension
     `overworld`, `nether`, `end` or an id).
