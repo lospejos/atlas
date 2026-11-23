@@ -84,6 +84,8 @@
   "world_atlas.setting.bed.tooltip": "Keep a \"Bed\" waypoint at your respawn point (bed or respawn anchor).",
   "world_atlas.setting.arrow": "Direction arrow",
   "world_atlas.setting.arrow.tooltip": "An arrow at the top of the screen pointing to the tracked waypoint, with its distance. Pick the waypoint with Track in its bubble on the world map.",
+  "world_atlas.setting.teleport": "Teleport",
+  "world_atlas.setting.teleport.tooltip": "Adds Teleport to a waypoint's bubble on the world map: it sends /tp, so it needs cheats in a single-player world or operator rights on a server. Off by default.",
   "world_atlas.setting.compass": "Compass bar",
   "world_atlas.setting.compass.tooltip": "A slim compass at the top of the screen: the directions and this dimension's waypoints slide along it as you turn. The tracked waypoint is larger, with its name and distance. Takes the direction arrow's place; boss bars move down under it.",
   "world_atlas.setting.radar_style": "Radar style",

@@ -233,6 +233,8 @@ pub(crate) struct Config {
     spawn: bool,
     bed: bool,
     arrow: bool,
+    /// The bubble's Teleport button works (off: the map is for looking only).
+    teleport: bool,
     /// The compass bar at the top of the screen.
     compass: bool,
     /// The minimap steps aside while F3 takes its corner, and while a screen is open.
@@ -269,6 +271,7 @@ impl Default for Config {
             spawn: true,
             bed: true,
             arrow: false,
+            teleport: false,
             compass: false,
             hide_in_f3: true,
             hide_in_screens: true,
@@ -277,7 +280,7 @@ impl Default for Config {
 }
 
 /// The on/off settings: key and default.
-const TOGGLES: [(&str, bool); 21] = [
+const TOGGLES: [(&str, bool); 22] = [
     ("radar_hover", true),
     ("minimap", true),
     ("minimap_round", false),
@@ -296,6 +299,7 @@ const TOGGLES: [(&str, bool); 21] = [
     ("spawn", true),
     ("bed", true),
     ("arrow", false),
+    ("teleport", false),
     ("compass", false),
     ("hide_in_f3", true),
     ("hide_in_screens", true),
@@ -341,6 +345,7 @@ fn settings() -> Vec<SettingSpec> {
         toggle("spawn"),
         toggle("bed"),
         toggle("arrow"),
+        toggle("teleport"),
         toggle("compass"),
     ];
     for slot in overlays::registered() {
@@ -921,6 +926,7 @@ impl State {
             spawn: on("spawn", d.spawn),
             bed: on("bed", d.bed),
             arrow: on("arrow", d.arrow),
+            teleport: on("teleport", d.teleport),
             compass: on("compass", d.compass),
             hide_in_f3: on("hide_in_f3", d.hide_in_f3),
             hide_in_screens: on("hide_in_screens", d.hide_in_screens),

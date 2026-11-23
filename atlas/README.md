@@ -54,7 +54,7 @@ there (see "Moving from my_map").
   the world puts the waypoint on the block the crosshair is on** (up to 256 blocks away) and the
   bubble points at that block; with nothing aimed at it is a plain box that says "Where you stand".
   **Shift+J** opens it with Temporary on. Click a marker, or right-click a row of the list: the
-  same bubble with **Move here, Hide / Show, Track / Untrack, Link, Share, Delete**; typing
+  same bubble with **Move here, Hide / Show, Track / Untrack, Link, Share, Teleport, Delete**; typing
   renames, a swatch, a switch or an icon applies at once (Enter keeps the name and place).
   The list is this dimension's nearest first, then the other dimensions' greyed with their
   dimension; a **search box** over it filters by name. Click a row to slide there, its beam glyph
@@ -78,6 +78,9 @@ there (see "Moving from my_map").
     added on the respawn, where you last stood). A bubble or a click holds its waypoint by an id
     the game session gives it, not by its place in the list: a death or a reached temporary
     waypoint while a bubble is open never makes it save into, or delete, another one.
+  - **Teleport** (setting, off by default) sends `/tp` to the waypoint, in its dimension: it needs cheats
+    in a single-player world or operator rights on a server. **`/atlas tp <x> <y> <z> [dimension]`**
+    does the same for any place and always works (`~` for your own).
   - **`/atlas add <name> <x> <y> <z> [dimension]`** adds one from chat (`~` for your own
     coordinate, `~5` relative; a name of several words, or in double quotes; dimension
     `overworld`, `nether`, `end` or an id).
@@ -131,7 +134,7 @@ Nether / Overworld coordinates (off), hide under F3 (on), hide in menus and chat
 dots), radar names on hover (on), waypoint beams (on), hide beam within (off, 8, 16, 32, 64
 blocks; 16), max beam distance (500 to 10000 blocks, unlimited), waypoint labels (on), names only
 on hover (off), death waypoint (on), deaths kept (1, 3, 5; 3), spawn / bed waypoints (on),
-direction arrow (off), compass bar (off). The explore overlays and the structure filter are kept in
+direction arrow (off), teleport (off), compass bar (off). The explore overlays and the structure filter are kept in
 `horizon-mod-data/world_atlas/explore.txt`, a typed seed in `<world>/seed.txt`.
 
 ## Files (`horizon-mod-data/world_atlas/` in the game folder)

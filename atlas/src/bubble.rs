@@ -1,6 +1,6 @@
 //! The waypoint bubble: a small panel above the spot it is about, pointing down at it. It asks
 //! for a name, the exact X Y Z, a colour, and whether the waypoint has a beam and is temporary;
-//! for an existing one it also carries its actions (move here, hide, track, link, share, delete).
+//! for an existing one it also carries its actions (move here, hide, track, link, share, teleport, delete).
 //! The square at the end of the colours' row shows the waypoint's icon; a click there opens the
 //! icon picker beside the bubble.
 use mod_api::{ClientHost, DrawContext, Flow};
@@ -12,7 +12,7 @@ use crate::{KEY_WAYPOINT, KEY_WAYPOINT_TEMP, State, TEST, Ui, block_of};
 
 const W: f32 = 176.0;
 const NEW_H: f32 = 72.0;
-const EDIT_H: f32 = 101.0;
+const EDIT_H: f32 = 114.0;
 const SWATCH: f32 = 11.0;
 /// The top of each row, from the panel's top: name, X Y Z, colours, switches, actions.
 const ROW_XYZ: f32 = 22.0;
@@ -34,10 +34,11 @@ pub enum Act {
     Track,
     Link,
     Share,
+    Teleport,
     Delete,
 }
 
-pub const ACTS: [Act; 6] = [Act::Move, Act::Hide, Act::Track, Act::Link, Act::Share, Act::Delete];
+pub const ACTS: [Act; 7] = [Act::Move, Act::Hide, Act::Track, Act::Link, Act::Share, Act::Teleport, Act::Delete];
 
 /// The two switches under the colours.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -335,6 +336,14 @@ impl State {
                 None => ("Link", "Only between the Overworld and the Nether".into(), false),
             },
             Act::Share => ("Share", format!("Send to chat: {}", waypoints::share_line(w)), true),
+            Act::Teleport if !self.config.teleport => {
+                ("Teleport", "Off: turn on Teleport in Options > Mods > World Atlas (needs cheats or op)".into(), false)
+            }
+            Act::Teleport => (
+                "Teleport",
+                format!("Go there with /tp, in the {} (needs cheats or op)", waypoints::dim_label(&w.dim)),
+                true,
+            ),
             Act::Delete => ("Delete", "Delete this waypoint".into(), true),
         }
     }
@@ -603,6 +612,13 @@ impl State {
             Act::Share => {
                 self.outbox.push(waypoints::share_line(&wp));
                 self.note(format!("Shared \"{}\" to chat", wp.name));
+            }
+            Act::Teleport => {
+                if !self.config.teleport {
+                    return false;
+                }
+                self.outbox.push(waypoints::tp_command(wp.pos, &wp.dim, &self.dim));
+                self.note(format!("Teleporting to \"{}\"", wp.name));
             }
             Act::Delete => {
                 self.waypoints.remove(index);
