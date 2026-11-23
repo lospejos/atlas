@@ -15,8 +15,8 @@ Goal: teleport to a waypoint or to any point of the world map from World Atlas.
 ## Steps
 
 1. [x] CI for atlas (`.github/workflows/build.yml`), branch `teleport`.
-2. [ ] `/atlas tp <x> <y> <z> [dimension]` through `send_chat`; check it in single player and on a server.
-   If `send_chat` fails in single player, look for another path (`send_packet`).
+2. [x] `/atlas tp <x> <y> <z> [dimension]` through `send_chat`; check it in single player and on a server.
+   Verified in single player (cheats world): same-dimension and `nether` jumps both work (CI build of branch `teleport`). A server is not tried yet.
 3. [ ] Waypoints: a Teleport button in the bubble and in the list's right-click; another dimension through
    `/execute in <dim> run tp @s ...` (done in `waypoints::tp_command`).
 4. [ ] Any map point: "Teleport here" on a right click. Y: surface height if the chunk is loaded; else `/tp` to the
