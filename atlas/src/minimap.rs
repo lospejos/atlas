@@ -132,7 +132,7 @@ impl State {
                 lines.push((format!("Light {block}  Sky {sky}"), 0xFFF0_E0A0));
             }
         }
-        if cfg.clock && let Some(t) = level.clock_time(host) {
+        if cfg.clock && let Some(t) = level.clock_time(host).or_else(|| level.day_time(host)) {
             // Tick 0 is 6:00; a day is 24000 ticks.
             let t = t.rem_euclid(24_000);
             lines.push((format!("{:02}:{:02}", (t / 1000 + 6) % 24, t % 1000 * 60 / 1000), 0xFFC0_D0FF));
