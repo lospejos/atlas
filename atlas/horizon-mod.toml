@@ -1,6 +1,6 @@
 id = "world_atlas"
 name = "World Atlas"
-version = "0.5.0"
+version = "0.5.1"
 description = "World Atlas: minimap, world map with cave and Nether layers, entity radar, waypoints with editing, sharing and portal links, PNG export."
 authors = ["publicusr"]
 # A wasm mod: Rust in src/, built to mod.wasm by `cargo horizon-mod build --wasm` against the SDK build Cargo.toml pins, beside data/ and assets/.
