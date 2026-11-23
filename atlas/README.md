@@ -81,6 +81,9 @@ there (see "Moving from my_map").
   - **Teleport** (setting, off by default) sends `/tp` to the waypoint, in its dimension: it needs cheats
     in a single-player world or operator rights on a server. **`/atlas tp <x> <y> <z> [dimension]`**
     does the same for any place and always works (`~` for your own).
+    The new-waypoint bubble (right-click an empty spot of the map) has a Teleport button too: an explored
+    spot gets a plain `/tp`; an unseen one first drops you from the world top (slow falling) and then moves you
+    onto the ground once its chunk has loaded.
   - **`/atlas add <name> <x> <y> <z> [dimension]`** adds one from chat (`~` for your own
     coordinate, `~5` relative; a name of several words, or in double quotes; dimension
     `overworld`, `nether`, `end` or an id).
