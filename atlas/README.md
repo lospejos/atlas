@@ -12,8 +12,8 @@ there (see "Moving from my_map").
 ## What it does
 
 - **Minimap.** Square, north up, top right by default (unchanged from 0.2). Options: round, turning
-  with you, any of the four corners, size, zoom, a second line with the Nether / Overworld
-  coordinates. Terrain in map colours with height and water-depth shading, your arrow, waypoints
+  with you, any of the four corners with an X / Y offset in from it (to clear the pop-ups at the top right),
+  size, zoom, lines under it: coordinates, the Nether / Overworld coordinates, biome, light level, time of day. Terrain in map colours with height and water-depth shading, your arrow, waypoints
   (on the edge when they are off the map, wholly inside it), entity faces, structure markers.
   **[ / ]** zoom it a step in or out (a short "2x" hint shows, the step is kept as the setting);
   **hold Z** to enlarge it (2.2x, as far as the screen has room) while held. It hides itself
@@ -131,8 +131,8 @@ search, Esc closes the picker first.
 
 ## Settings (Options > Mods > World Atlas)
 
-Show minimap, size (48-200), zoom (4x-1/4x), corner, round, turns with you, coordinates,
-Nether / Overworld coordinates (off), hide under F3 (on), hide in menus and chat (on), map layer
+Show minimap, size (48-200), zoom (4x-1/4x), corner, offset X / Y (0-400), round, turns with you, coordinates,
+Nether / Overworld coordinates (off), biome (on), light level (off), time (off), hide under F3 (on), hide in menus and chat (on), map layer
 (Auto), biome colours (on), radar hostile / animals / players / items (on), radar style (faces /
 dots), radar names on hover (on), waypoint beams (on), hide beam within (off, 8, 16, 32, 64
 blocks; 16), max beam distance (500 to 10000 blocks, unlimited), waypoint labels (on), names only

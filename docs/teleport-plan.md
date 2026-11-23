@@ -24,7 +24,7 @@ Goal: teleport to a waypoint or to any point of the world map from World Atlas.
 4. [x] Any map point. Verified in game (HEAD 7a4c0ea, CI green, explore test was flaky): right click on an unseen Overworld spot, Teleport: slow falling, /tp to y320, then /tp onto the surface (leaf canopy, WorldSurface), on_ground. Nether not tried. (old note: code pushed in commit acfbb3b, CI run 45251001699 FAILED in unit tests: `bubble::tests::the_rows_fit_the_bubble` (my `NEW_MAP_H` 86 was 2 px too small, fixed to 88 in the next commit) and `explore::tests::a_left_world_lets_no_seed_through` (passed in the earlier green run a8badfd: check whether it is flaky / shares global state, or whether my change broke it); not yet tested in game): "Teleport here" on a right click. Y: surface height if the chunk is loaded; else `/tp` to the
    world's top, wait for the chunk, read the height, `/tp` to the surface. Nether and caves: the player's Y.
 5. [x] Guard (no far-jump confirmation: skipped as optional; README done): setting "teleport", off by default; an optional confirmation for far jumps; errors to chat; README, lang.
-6. [~] Release tag `v0.5.0` (version in `atlas/Cargo.toml` and `atlas/horizon-mod.toml`).
+6. [x] Release tag `v0.5.0` (version in `atlas/Cargo.toml` and `atlas/horizon-mod.toml`).
 
 Risk: teleport breaks the "honest explorer" mode, hence the setting is off by default.
 
@@ -64,3 +64,8 @@ How to test without a local toolchain (Windows, Git Bash):
    The test world's player is in the Nether at 25 80 -18; it has waypoint `Home` (Overworld 200 100 -150).
 - `horizon-mods/deep_ores.hmod` belongs to another Claude Code session (a different mod): leave it alone.
 - Do not install Rust locally (user's rule); read SDK sources with `gh api repos/horizon-rust/horizon/contents/<path>?ref=0a875da...`.
+
+## After 0.5.0
+
+Done, CI green, checked in game: the map closes after a Teleport; minimap offset X / Y (`minimap_x`, `minimap_y`); lines under
+the minimap: biome, light, time; mod icon (`atlas/icon.png`, packed into the .hmod). Not tried: Nether, a server, other corners.
