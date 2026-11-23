@@ -3,7 +3,7 @@
 //! for an existing one it also carries its actions (move here, hide, track, link, share, teleport, delete).
 //! The square at the end of the colours' row shows the waypoint's icon; a click there opens the
 //! icon picker beside the bubble.
-use mod_api::{ClientHost, DrawContext, Flow};
+use mod_api::{ClientHost, DrawContext, Flow, Heightmap};
 
 use crate::gfx::{self, POINTER, argb, inside};
 use crate::icons::{Picker, Reply};
@@ -13,6 +13,8 @@ use crate::{KEY_WAYPOINT, KEY_WAYPOINT_TEMP, State, TEST, Ui, block_of};
 const W: f32 = 176.0;
 const NEW_H: f32 = 72.0;
 const EDIT_H: f32 = 114.0;
+/// A new waypoint's bubble on the map: one row of actions (Teleport).
+const NEW_MAP_H: f32 = 86.0;
 const SWATCH: f32 = 11.0;
 /// The top of each row, from the panel's top: name, X Y Z, colours, switches, actions.
 const ROW_XYZ: f32 = 22.0;
@@ -82,6 +84,15 @@ pub struct Edit {
     pub named: bool,
     /// Opened in the world on the block the crosshair was on: where the bubble points.
     pub anchor: Option<[f64; 3]>,
+    /// The map had not seen this column: the Y is the player's, a guess.
+    pub guess: bool,
+}
+
+/// A teleport to a column the map has not seen: the player was sent to the top of the world and
+/// lands on the ground once the column's chunk has loaded, or stays up there at `until`.
+pub struct PendingTp {
+    column: [i32; 2],
+    until: u64,
 }
 
 impl Edit {
@@ -103,6 +114,7 @@ impl Edit {
             typed: false,
             named: false,
             anchor: None,
+            guess: false,
         }
     }
 
@@ -246,7 +258,11 @@ impl State {
     /// in the world), pointing down at it; below, pointing up, when there is no room above.
     pub(crate) fn bubble(&self, edit: &Edit) -> Bubble {
         let [w, h] = self.gui;
-        let (bw, bh) = if edit.target.is_some() { (W, EDIT_H) } else { (W, NEW_H) };
+        let (bw, bh) = match (edit.target.is_some(), edit.from_map) {
+            (true, _) => (W, EDIT_H),
+            (false, true) => (W, NEW_MAP_H),
+            (false, false) => (W, NEW_H),
+        };
         let spot = match (edit.from_map, self.view) {
             (true, Some(view)) => self.screen_at(view, f64::from(edit.pos[0]) + 0.5, f64::from(edit.pos[2]) + 0.5),
             // In the world: the aimed block as the view shows it, else the crosshair.
@@ -503,6 +519,25 @@ impl State {
                 }
             }
         }
+        // A new waypoint on the map: Teleport to the typed place.
+        if edit.target.is_none() && edit.from_map {
+            let r = action(p, 0);
+            let usable = self.config.teleport;
+            let hot = usable && inside(r, mouse);
+            let color = match (usable, hot) {
+                (false, _) => 0xFF60_6060,
+                (_, true) => 0xFFFF_FFFF,
+                _ => 0xFFC8_C8D8,
+            };
+            bubble_button(draw, r, "Teleport", false, hot, color);
+            if inside(r, mouse) {
+                tip_line = Some(if usable {
+                    "Go to the place above with /tp (needs cheats or op)".to_string()
+                } else {
+                    "Off: turn on Teleport in Options > Mods > World Atlas (needs cheats or op)".to_string()
+                });
+            }
+        }
         if let Some(picker) = edit.picker.as_mut() {
             let rect = picker_rect;
             let rgb = COLORS.get(edit.color).copied().unwrap_or(look.color);
@@ -629,6 +664,43 @@ impl State {
         close
     }
 
+    /// Teleports to the place typed in a new waypoint's bubble. Where the map had not seen the
+    /// column (the Y is a guess) and the dimension has no roof: up to the top of the world with
+    /// slow falling, then onto the ground when the chunk is there (`run_pending_tp`).
+    pub(crate) fn teleport_here(&mut self, host: &dyn ClientHost) -> bool {
+        let Ui::Edit(edit) = &self.ui else { return false };
+        let Some(pos) = edit.coords().filter(|_| self.config.teleport) else { return false };
+        let blind = edit.guess && pos[1] == edit.pos[1] && !self.dim_info.ceiling;
+        if blind {
+            self.outbox.push("/effect give @s minecraft:slow_falling 20 0 true".into());
+            self.outbox.push(waypoints::tp_command([pos[0], self.dim_info.roof, pos[2]], &self.dim, &self.dim));
+            self.pending_tp = Some(PendingTp { column: [pos[0], pos[2]], until: host.millis() + 15_000 });
+        } else {
+            self.outbox.push(waypoints::tp_command(pos, &self.dim, &self.dim));
+        }
+        self.note(format!("Teleporting to {} {} {}", pos[0], pos[1], pos[2]));
+        true
+    }
+
+    /// Finishes a blind teleport: onto the ground of its column once the chunk is loaded.
+    pub(crate) fn run_pending_tp(&mut self, host: &dyn ClientHost) {
+        let Some(wait) = &self.pending_tp else { return };
+        let [x, z] = wait.column;
+        if host.millis() > wait.until {
+            self.pending_tp = None;
+            self.said.push("[Atlas] That place did not load in time: you stay high up".into());
+            return;
+        }
+        let top = host
+            .client_surface_heights(&[(x, z)], Heightmap::WorldSurface)
+            .ok()
+            .and_then(|h| h.first().copied().flatten());
+        if let Some(top) = top {
+            self.pending_tp = None;
+            self.outbox.push(waypoints::tp_command([x, top, z], &self.dim, &self.dim));
+        }
+    }
+
     pub(crate) fn edit_press(&mut self, host: &dyn ClientHost, mouse: [f32; 2], _button: i32) {
         let Ui::Edit(edit) = &self.ui else { return };
         let panel = self.bubble(edit).panel;
@@ -696,6 +768,12 @@ impl State {
             if let Some(w) = target.and_then(|t| self.by_id_mut(t)) {
                 (w.beam, w.temporary) = (beam, temporary);
                 self.save_waypoints(host);
+            }
+            return;
+        }
+        if target.is_none() && matches!(&self.ui, Ui::Edit(e) if e.from_map) && inside(action(panel, 0), mouse) {
+            if self.teleport_here(host) {
+                self.ui = Ui::Map;
             }
             return;
         }
@@ -897,6 +975,7 @@ mod tests {
         assert!(swatch(p, COLORS.len() - 1)[0] + SWATCH < icon_slot(p)[0] - 2.0);
         assert_eq!(switch(p, 1)[0] + switch(p, 1)[2], W - 5.0);
         assert!(switch(p, 0)[1] + 12.0 <= NEW_H - 5.0);
-        assert!(action(p, 5)[1] + 12.0 <= EDIT_H - 5.0);
+        assert!(action(p, ACTS.len() - 1)[1] + 12.0 <= EDIT_H - 5.0);
+        assert!(action(p, 0)[1] + 12.0 <= NEW_MAP_H - 5.0);
     }
 }

@@ -891,11 +891,13 @@ impl State {
             None if button == 1 => {
                 let [x, z] = self.block_at(view, mouse);
                 let (x, z) = (x.floor() as i32, z.floor() as i32);
-                let y = match self.shown().column(x, z) {
-                    Some((c, y, _)) if c != UNSEEN => i32::from(y) + 1,
-                    _ => self.player.map_or(64, |p| p.pos[1].floor() as i32),
+                let (y, guess) = match self.shown().column(x, z) {
+                    Some((c, y, _)) if c != UNSEEN => (i32::from(y) + 1, false),
+                    _ => (self.player.map_or(64, |p| p.pos[1].floor() as i32), true),
                 };
-                self.ui = Ui::Edit(Edit::new([x, y, z], self.next_color, true));
+                let mut edit = Edit::new([x, y, z], self.next_color, true);
+                edit.guess = guess;
+                self.ui = Ui::Edit(edit);
             }
             None => {}
         }

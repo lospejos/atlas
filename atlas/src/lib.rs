@@ -517,6 +517,8 @@ pub(crate) struct State {
     inbox: Vec<waypoints::Inbound>,
     /// Chat lines to send, and lines to show in this client's own chat, at the next tick.
     outbox: Vec<String>,
+    /// A teleport to a column nobody has seen: it lands on the ground once its chunk is there.
+    pending_tp: Option<bubble::PendingTp>,
     said: Vec<String>,
     /// The server half's read this state has taken in.
     server_beat: u64,
@@ -592,6 +594,7 @@ impl Default for State {
             export: None,
             inbox: Vec::new(),
             outbox: Vec::new(),
+            pending_tp: None,
             said: Vec::new(),
             server_beat: 0,
             stats: Stats::default(),
@@ -779,6 +782,7 @@ impl State {
         self.export = None;
         self.inbox.clear();
         self.outbox.clear();
+        self.pending_tp = None;
         self.temp_armed.clear();
         self.search = mapscreen::Search::default();
         self.server_beat = 0;
@@ -1413,6 +1417,7 @@ impl Hooks for Atlas {
                 st.note(format!("Could not share: {why}"));
             }
         }
+        st.run_pending_tp(host);
         for line in std::mem::take(&mut st.said) {
             let _ = host.chat_line(Text::literal(line));
         }
