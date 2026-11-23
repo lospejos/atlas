@@ -763,16 +763,21 @@ mod tests {
 
     #[test]
     fn a_left_world_lets_no_seed_through() {
+        // enter and leave skip a busy SHARED (try_lock): other tests may hold it, so retry until it took.
+        fn settle(ex: &mut Explore, enter: bool, done: impl Fn(&Shared) -> bool) {
+            for _ in 0..1000 {
+                if enter { ex.enter() } else { ex.leave() }
+                if done(&SHARED.lock().unwrap()) { return }
+                std::thread::yield_now();
+            }
+            panic!("SHARED stayed busy");
+        }
         let mut ex = Explore::default();
-        ex.enter();
+        settle(&mut ex, true, |s| s.world != 0);
         let world = SHARED.lock().unwrap().world;
-        assert_ne!(world, 0);
-        ex.enter();
-        assert_ne!(SHARED.lock().unwrap().world, world, "each world its own number");
-        ex.leave();
-        let shared = SHARED.lock().unwrap();
-        assert_eq!((shared.world, shared.built_for), (0, 0));
-        assert!(shared.verifier.is_none());
+        settle(&mut ex, true, |s| s.world != world);
+        settle(&mut ex, false, |s| (s.world, s.built_for) == (0, 0));
+        assert!(SHARED.lock().unwrap().verifier.is_none());
     }
 
     #[test]
