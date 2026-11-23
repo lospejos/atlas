@@ -21,7 +21,7 @@ Goal: teleport to a waypoint or to any point of the world map from World Atlas.
    `/execute in <dim> run tp @s ...` (`waypoints::tp_command`). Setting `teleport` (off by default) gates the button, the typed
    `/atlas tp` always works. Verified in game: Nether to an Overworld waypoint. Mod settings are plain files in
    `horizon-mods/.horizon-mod-data/world_atlas/<key>`, read at world join (useful for tests).
-4. [~] Any map point (code pushed in commit acfbb3b, CI run 45251001699 not yet checked, not yet tested in game): "Teleport here" on a right click. Y: surface height if the chunk is loaded; else `/tp` to the
+4. [~] Any map point (code pushed in commit acfbb3b, CI run 45251001699 FAILED in unit tests: `bubble::tests::the_rows_fit_the_bubble` (my `NEW_MAP_H` 86 was 2 px too small, fixed to 88 in the next commit) and `explore::tests::a_left_world_lets_no_seed_through` (passed in the earlier green run a8badfd: check whether it is flaky / shares global state, or whether my change broke it); not yet tested in game): "Teleport here" on a right click. Y: surface height if the chunk is loaded; else `/tp` to the
    world's top, wait for the chunk, read the height, `/tp` to the surface. Nether and caves: the player's Y.
 5. [ ] Guard: setting "teleport", off by default; an optional confirmation for far jumps; errors to chat; README, lang.
 6. [ ] Release tag `v0.5.0` (version in `atlas/Cargo.toml` and `atlas/horizon-mod.toml`).
@@ -42,7 +42,7 @@ Step 4, written but unverified (commit acfbb3b):
 - Column explored: plain `/tp` at the stored height. Column unseen (Y is the player's, a guess) in a dimension without a roof:
   `/effect give @s minecraft:slow_falling 20 0 true`, `/tp` to the world top, then, once `client_surface_heights(WorldSurface)`
   has the column, a second `/tp` onto the ground (gives up after 15 s with a chat line).
-- Next: check the CI run (`gh run list --branch teleport`); if it failed, read `gh run view <id> --log-failed`. Then test in game
+- Next: check the newest CI run (`gh run list --branch teleport`); if it failed, read `gh run view <id> --log-failed`. Then test in game
   (below): right-click an unexplored spot on the map, press Teleport, check the player lands on the ground, also in the Nether
   (roof: plain `/tp` at the guessed Y).
 

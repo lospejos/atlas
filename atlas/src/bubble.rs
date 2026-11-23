@@ -14,7 +14,7 @@ const W: f32 = 176.0;
 const NEW_H: f32 = 72.0;
 const EDIT_H: f32 = 114.0;
 /// A new waypoint's bubble on the map: one row of actions (Teleport).
-const NEW_MAP_H: f32 = 86.0;
+const NEW_MAP_H: f32 = 88.0;
 const SWATCH: f32 = 11.0;
 /// The top of each row, from the panel's top: name, X Y Z, colours, switches, actions.
 const ROW_XYZ: f32 = 22.0;
