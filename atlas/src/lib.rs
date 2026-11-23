@@ -289,7 +289,7 @@ impl Default for Config {
 }
 
 /// The on/off settings: key and default.
-const TOGGLES: [(&str, bool); 22] = [
+const TOGGLES: [(&str, bool); 25] = [
     ("radar_hover", true),
     ("minimap", true),
     ("minimap_round", false),
