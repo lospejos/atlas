@@ -103,14 +103,49 @@ impl State {
 
     /// The lines under the minimap, in GUI pixels.
     fn minimap_text_h(&self) -> f32 {
-        (if self.config.coords { 11.0 } else { 0.0 }) + if self.config.other_coords { 10.0 } else { 0.0 }
+        let c = &self.config;
+        let n = [c.coords, c.other_coords, c.biome, c.light, c.clock].into_iter().filter(|on| *on).count();
+        if n == 0 { 0.0 } else { n as f32 * 10.0 + 1.0 }
+    }
+
+    /// The lines under the minimap: coordinates, the other dimension's, biome, light, time.
+    fn info_lines(&self, host: &dyn ClientHost, player: Player) -> Vec<(String, u32)> {
+        let cfg = &self.config;
+        let mut lines = Vec::new();
+        if cfg.coords {
+            let p = player.pos;
+            lines.push((format!("{} {} {}", p[0].floor(), p[1].floor(), p[2].floor()), 0xFFFF_FFFF));
+        }
+        if cfg.other_coords && let Some((name, ox, oz)) = self.other_side(player.pos[0], player.pos[2]) {
+            lines.push((format!("{name} {ox} {oz}"), 0xFFB0_B0C8));
+        }
+        let level = host.level(&self.dim).filter(|_| cfg.biome || cfg.light || cfg.clock);
+        let Some(level) = level else { return lines };
+        let b = crate::block_of(player.pos);
+        if cfg.biome && let Some(id) = level.client_biome(host, b) {
+            lines.push((crate::radar::pretty(&id), 0xFFB0_E0B0));
+        }
+        if cfg.light {
+            let block = level.brightness(host, mod_api::LightLayer::Block, b);
+            let sky = level.brightness(host, mod_api::LightLayer::Sky, b);
+            if let (Some(block), Some(sky)) = (block, sky) {
+                lines.push((format!("Light {block}  Sky {sky}"), 0xFFF0_E0A0));
+            }
+        }
+        if cfg.clock && let Some(t) = level.clock_time(host) {
+            // Tick 0 is 6:00; a day is 24000 ticks.
+            let t = t.rem_euclid(24_000);
+            lines.push((format!("{:02}:{:02}", (t / 1000 + 6) % 24, t % 1000 * 60 / 1000), 0xFFC0_D0FF));
+        }
+        lines
     }
 
     /// The minimap's side fully enlarged: `GROW` times the setting, as far as the screen has
     /// room (its height less the lines under it, and under half its width), even.
     fn big_side(&self) -> f32 {
         let base = self.config.size;
-        let room = (self.gui[1] - self.minimap_text_h() - 16.0).min(self.gui[0] * 0.45);
+        let [ox, oy] = self.config.offset;
+        let room = (self.gui[1] - oy - self.minimap_text_h() - 16.0).min((self.gui[0] - ox) * 0.45);
         (((base * GROW).min(room) / 2.0).floor() * 2.0).max(base)
     }
 
@@ -323,9 +358,14 @@ impl State {
         let Some(player) = self.player else { return };
         let cfg = self.config;
         let side = self.mini_side();
-        let other = if cfg.other_coords { self.other_side(player.pos[0], player.pos[2]) } else { None };
-        let text_h = if cfg.coords { 11.0 } else { 0.0 } + if other.is_some() { 10.0 } else { 0.0 };
-        let (bx, by) = event.corners.place(self.minimap_corner(), side + 2.0, side + 2.0 + text_h);
+        let lines = self.info_lines(host, player);
+        let text_h = if lines.is_empty() { 0.0 } else { lines.len() as f32 * 10.0 + 1.0 };
+        let (w, h) = (side + 2.0, side + 2.0 + text_h);
+        let (bx, by) = event.corners.place(self.minimap_corner(), w, h);
+        // Moved in from its corner by the offset, but never off the screen.
+        let (right, bottom) = (matches!(cfg.corner, 0 | 2), matches!(cfg.corner, 2 | 3));
+        let bx = (bx + if right { -cfg.offset[0] } else { cfg.offset[0] }).clamp(0.0, (self.gui[0] - w).max(0.0));
+        let by = (by + if bottom { -cfg.offset[1] } else { cfg.offset[1] }).clamp(0.0, (self.gui[1] - h).max(0.0));
         self.hud.mini_rect = Some([bx, by, side + 2.0, side + 2.0 + text_h]);
         let draw = &mut *event.draw;
         let (x, y) = (bx + 1.0, by + 1.0);
@@ -432,14 +472,9 @@ impl State {
         draw.text("N", [north[0] - 2.5, north[1] - 4.0], 0xFFFF_FFFF, true);
         self.draw_zoom_hint(draw, center[0], y + side);
         let mut line_y = y + side + 3.0;
-        if cfg.coords {
-            let p = player.pos;
-            let text = format!("{} {} {}", p[0].floor(), p[1].floor(), p[2].floor());
-            centered(draw, &text, center[0], line_y, 0xFFFF_FFFF);
+        for (text, color) in &lines {
+            centered(draw, text, center[0], line_y, *color);
             line_y += 10.0;
-        }
-        if let Some((name, ox, oz)) = other {
-            centered(draw, &format!("{name} {ox} {oz}"), center[0], line_y, 0xFFB0_B0C8);
         }
     }
 
