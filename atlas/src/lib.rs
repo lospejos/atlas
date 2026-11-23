@@ -1518,12 +1518,25 @@ impl Hooks for Atlas {
     fn register_client_commands(&self, _: &mut dyn ClientHost, event: &mut RegisterClientCommandsEvent<'_>) {
         event.commands.push(Command::new("atlas import [entry:word]"));
         event.commands.push(Command::new("atlas add <waypoint:text>"));
+        event.commands.push(Command::new("atlas tp <place:text>"));
     }
 
     /// `/atlas import`: takes the waypoints shared in chat. `/atlas add <name> <x> <y> <z>
     /// [dimension]`: a waypoint at those coordinates (`~` for the player's own).
     fn command(&self, host: &mut dyn ClientHost, event: &mut CommandEvent<'_>) -> Flow {
         let line = event.command.trim_start_matches('/').trim();
+        // `/atlas tp <x> <y> <z> [dimension]`: sent on the next tick with the other chat lines.
+        if let Some(args) = line.strip_prefix("atlas tp").filter(|a| a.is_empty() || a.starts_with(' ')) {
+            let Ok(mut st) = self.state.try_lock() else { return Flow::Cancel };
+            let (Some(player), true) = (st.player, st.world.is_some()) else { return Flow::Cancel };
+            match waypoints::parse_tp(args, player.pos, &st.dim) {
+                Ok(cmd) => st.outbox.push(cmd),
+                Err(why) => {
+                    let _ = host.chat_line(Text::literal(format!("[Atlas] {why}")));
+                }
+            }
+            return Flow::Cancel;
+        }
         if let Some(args) = line.strip_prefix("atlas add").filter(|a| a.is_empty() || a.starts_with(' ')) {
             let Ok(mut st) = self.state.try_lock() else { return Flow::Cancel };
             let (Some(player), true) = (st.player, st.world.is_some()) else { return Flow::Cancel };

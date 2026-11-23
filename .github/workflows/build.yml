@@ -1,0 +1,53 @@
+name: build
+
+# Every push to main or teleport, and every PR, builds the .hmod and runs the unit tests; a tag `v*` also attaches the .hmod to a release.
+on:
+  push:
+    branches: ["main", "teleport"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  # The SDK build pinned in atlas/Cargo.toml ([package.metadata.horizon] sdk).
+  SDK_REV: 0a875da91dbb0fdcb7ba8c42c11341aa229af51a
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.rustup
+            atlas/target
+            atlas/.horizon
+          key: atlas-${{ env.SDK_REV }}-${{ hashFiles('atlas/Cargo.lock') }}
+          restore-keys: atlas-${{ env.SDK_REV }}-
+      - name: Install rustup toolchain (the tool then installs the pinned one itself)
+        run: rustup toolchain install stable --profile minimal
+      - name: Install cargo-horizon-mod from the SDK commit
+        run: command -v cargo-horizon-mod || cargo install --locked --git https://github.com/horizon-rust/horizon --rev "$SDK_REV" cargo-horizon-mod
+      # The build also fetches the SDK into .horizon/, which `cargo test` needs.
+      - name: Build
+        working-directory: atlas
+        run: cargo horizon-mod build --wasm
+      - name: Unit tests
+        working-directory: atlas
+        run: cargo test
+      - uses: actions/upload-artifact@v7
+        with:
+          name: atlas-hmod
+          path: atlas/target/horizon-mod/*.hmod
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" atlas/target/horizon-mod/*.hmod --title "$GITHUB_REF_NAME" --notes "World Atlas, WebAssembly build."

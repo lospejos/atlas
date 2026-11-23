@@ -398,6 +398,36 @@ pub fn parse_add(args: &str, at: [f64; 3], dim: &str) -> Result<(String, [i32; 3
     Ok((name, pos, dim))
 }
 
+pub const TP_USAGE: &str = "/atlas tp <x> <y> <z> [dimension]";
+
+/// The chat command that takes the player to `pos` in `dim`: a plain `/tp` in the dimension the
+/// player is in, else one run `in` the other (the server moves the player there).
+pub fn tp_command(pos: [i32; 3], dim: &str, here: &str) -> String {
+    let at = format!("tp @s {}.5 {} {}.5", pos[0], pos[1], pos[2]);
+    if dim == here { format!("/{at}") } else { format!("/execute in {dim} run {at}") }
+}
+
+/// `/atlas tp`'s arguments: X Y Z (numbers or `~`) and an optional dimension, as `/atlas add`
+/// takes them, minus the name. The command to send, or what is wrong.
+pub fn parse_tp(args: &str, at: [f64; 3], here: &str) -> Result<String, String> {
+    let words: Vec<&str> = args.split_whitespace().collect();
+    if words.len() != 3 && words.len() != 4 {
+        return Err(format!("Usage: {TP_USAGE}"));
+    }
+    let mut pos = [0; 3];
+    for axis in 0..3 {
+        pos[axis] =
+            command_coord(words[axis], at[axis], axis).ok_or_else(|| format!("Not a coordinate: {}", words[axis]))?;
+    }
+    let dim = match words.get(3) {
+        Some(word) => {
+            command_dim(word).ok_or_else(|| format!("Not a dimension: {word} (overworld, nether, end or an id)"))?
+        }
+        None => here.to_string(),
+    };
+    Ok(tp_command(pos, &dim, here))
+}
+
 /// Whether `name` is one `add_death` gave: "Death", "Death 2", ... (a renamed one keeps its name).
 fn death_name(name: &str) -> bool {
     name == "Death" || name.strip_prefix("Death ").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
@@ -459,6 +489,18 @@ pub fn away(w: &Waypoint, at: [f64; 3]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tp_commands() {
+        let at = [10.7, 64.0, -3.2];
+        assert_eq!(parse_tp("1 70 -2", at, OVERWORLD).unwrap(), "/tp @s 1.5 70 -2.5");
+        assert_eq!(parse_tp("~ ~5 ~", at, OVERWORLD).unwrap(), "/tp @s 10.5 69 -4.5");
+        assert_eq!(parse_tp("8 70 8 nether", at, OVERWORLD).unwrap(), format!("/execute in {NETHER} run tp @s 8.5 70 8.5"));
+        assert_eq!(parse_tp("8 70 8 nether", at, NETHER).unwrap(), "/tp @s 8.5 70 8.5");
+        assert!(parse_tp("1 2", at, OVERWORLD).is_err());
+        assert!(parse_tp("1 2 x", at, OVERWORLD).is_err());
+        assert!(parse_tp("1 2 3 mars", at, OVERWORLD).is_err());
+    }
 
     #[test]
     fn the_file_keeps_every_field() {
